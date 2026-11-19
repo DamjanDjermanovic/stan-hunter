@@ -1,0 +1,201 @@
+{
+  "id": "Bf5AqMSpJqScMgxu",
+  "name": "Enrich - photo quality (Claude vision)",
+  "description": "New listings that pass the filter → cover photo → Claude vision rates condition and furnishing (1–5) → kvalitet. Returns only id + fields; the Orchestrator merges them.",
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "0e722439-3376-4a99-807f-7854889e10db",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "880e10b4-38f5-4884-8991-267cd1f3805d",
+      "name": "SelectForPhoto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        100
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Only new listings that pass the filter and have a photo, at most 15 per run (cost control).\n// One photo per listing (the cover photo from the search results): ~1k tokens with Haiku.\n// A one-off backfill can raise the limit by sending _photo_limit on the items.\nconst MAX = Math.min(Number($input.first()?.json?._photo_limit) || 15, 150);\nreturn $input.all()\n  .filter(i => i.json.prosao_filter === true && /^https:\\/\\//.test(i.json.slika || ''))\n  .slice(0, MAX)\n  .map(i => ({ json: { id: i.json.id, slika: i.json.slika } }));"
+      }
+    },
+    {
+      "id": "eda93c2f-117f-4073-8c5c-a94eecf9f0ac",
+      "name": "RatePhoto",
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        660,
+        100
+      ],
+      "parameters": {
+        "resource": "image",
+        "operation": "analyze",
+        "modelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "claude-haiku-5-5"
+        },
+        "inputType": "url",
+        "imageUrls": "={{ $json.slika }}",
+        "simplify": true,
+        "text": "Na slici je glavna fotografija iz oglasa za izdavanje stana u Beogradu. Oceni stan sa slike. stanje: 1 = staro i dotrajalo (zastareo nameštaj, stari podovi, oronulo kupatilo ili kuhinja), 3 = održavano ali ne novo, 5 = novo ili sveže renovirano. opremljenost: 1 = prazno ili samo osnovno, 3 = uobičajeno opremljeno, 5 = kompletno i moderno opremljeno. Ako slika ne prikazuje unutrašnjost stana (zgrada spolja, ulica, mapa, tlocrt, logo agencije), vrati null za obe ocene. Vrati ISKLJUČIVO jedan JSON objekat, bez objašnjenja i bez markdown ograda: {\"stanje\": broj 1-5 ili null, \"opremljenost\": broj 1-5 ili null, \"opis\": \"najviše 8 reči na srpskom, latinica, ekavica\"}",
+        "options": {
+          "maxTokens": 4000
+        }
+      },
+      "credentials": {
+        "anthropicApi": {
+          "name": "Anthropic account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "id": "5c66384e-3804-414d-972a-87720a4a5b75",
+      "name": "ParsePhoto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        100
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Claude returns JSON → validate. kvalitet = mean of condition and furnishing (1–5), null if the photo is not an interior.\n// Haiku also spends output tokens on thinking, so a reply can be cut off mid-JSON (lesson 31): maxTokens is 1500,\n// and if JSON.parse still fails, the two scores are read with a regex from the truncated text.\n// Output: only id + fields; the Orchestrator merges them into the listing.\nconst base = $('SelectForPhoto').item.json;\nconst blocks = Array.isArray($json.content) ? $json.content : [];\nconst raw = String($json.merged_response || blocks.filter(c => c.type === 'text').map(c => c.text).join('') || $json.text || '');\nlet p = null;\ntry { p = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)); } catch (e) { p = null; }\nif (!p) {\n  const num = k => { const m = raw.match(new RegExp('\"' + k + '\"\\\\s*:\\\\s*(null|\\\\d+(?:\\\\.\\\\d+)?)')); return m ? (m[1] === 'null' ? null : Number(m[1])) : undefined; };\n  const st = num('stanje'), op = num('opremljenost');\n  if (st !== undefined && op !== undefined) p = { stanje: st, opremljenost: op, opis: null };\n}\nconst score = v => { const n = Number(v); return v === null || v === undefined || !Number.isFinite(n) ? null : Math.min(5, Math.max(1, n)); };\nconst s = p ? score(p.stanje) : null;\nconst o = p ? score(p.opremljenost) : null;\nconst parts = [s, o].filter(x => x !== null);\nconst kvalitet = parts.length ? Math.round(parts.reduce((a, b) => a + b, 0) / parts.length * 10) / 10 : null;\n// The model sometimes mixes a Cyrillic letter into Latin text (\"namešten\" with Cyrillic е/н) → transliterate.\nconst CYR = { 'а':'a','б':'b','в':'v','г':'g','д':'d','ђ':'đ','е':'e','ж':'ž','з':'z','и':'i','ј':'j','к':'k','л':'l','љ':'lj','м':'m','н':'n','њ':'nj','о':'o','п':'p','р':'r','с':'s','т':'t','ћ':'ć','у':'u','ф':'f','х':'h','ц':'c','ч':'č','џ':'dž','ш':'š' };\nconst lat = t => t.replace(/[Ѐ-ӿ]/g, ch => { const low = ch.toLowerCase(); const r = CYR[low] ?? ''; return ch === low ? r : r.charAt(0).toUpperCase() + r.slice(1); });\nconst opis = p && typeof p.opis === 'string' && p.opis.trim() ? lat(p.opis.trim()).slice(0, 80) : null;\nreturn { json: { id: base.id, photo_ok: p !== null, kvalitet, kvalitet_opis: kvalitet === null ? null : opis, photo_greska: p ? null : String($json.error?.message ?? $json.error ?? raw.slice(0, 120)).slice(0, 200) } };"
+      }
+    },
+    {
+      "id": "b9ef5c96-86c1-40e9-8917-50aa3dad2eb1",
+      "name": "Manual Test",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        200
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "3dcf24c2-873a-4a4a-a9da-aae5236b166b",
+      "name": "SampleListings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        200
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Manual test only: one listing per source\nreturn [\n  { json: { id: '4zida_6afc81ee000a610bfe040921', prosao_filter: true, slika: 'https://resizer2.4zida.rs/4Ixz8xCrGUEg6Q8qlhLDovqeLfM7R4WY0Yyfr83Ay4Q/rs:fill:840:0:0/bG9jYWw6Ly8vNmFmYzgxZWUwMDBhNjEwYmZlMDQwOTIxLzhiYjAxYTk3MWI.jpeg' } },\n  { json: { id: 'cityexpert_13473', prosao_filter: true, slika: 'https://img.cityexpert.rs/properties/470x/13000/13473/slike/cityexpert.rs_-_nekretnina_id_-_13473_-_0207_-_20251110.jpg@jpg' } },\n  { json: { id: 'nekretnine_1667035', prosao_filter: true, slika: 'https://pic.nekretnine.rs/image/21176665/xxl.jpg' } }\n];"
+      }
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "SelectForPhoto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SelectForPhoto": {
+      "main": [
+        [
+          {
+            "node": "RatePhoto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RatePhoto": {
+      "main": [
+        [
+          {
+            "node": "ParsePhoto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Test": {
+      "main": [
+        [
+          {
+            "node": "SampleListings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SampleListings": {
+      "main": [
+        [
+          {
+            "node": "SelectForPhoto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "errorWorkflow": "UTOIDEVnd1km2Fjp",
+    "timezone": "Europe/Belgrade"
+  },
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  },
+  "nodeGroups": [
+    {
+      "id": "33f17ebe-4081-4822-bb02-cc06aa5e8d1e",
+      "name": "Claude vision",
+      "nodeIds": [
+        "880e10b4-38f5-4884-8991-267cd1f3805d",
+        "eda93c2f-117f-4073-8c5c-a94eecf9f0ac",
+        "5c66384e-3804-414d-972a-87720a4a5b75"
+      ],
+      "description": "Cover photo → condition + furnishing 1–5 → kvalitet; max 15 per run"
+    }
+  ],
+  "sourceWorkflowId": null,
+  "tags": [
+    "llm",
+    "stan-hunter"
+  ],
+  "versionMetadata": {
+    "name": "maxTokens 4000",
+    "description": "Updated nodes: RatePhoto"
+  }
+}

@@ -1,0 +1,1041 @@
+{
+  "id": "DgT2udY7EgfZnneo",
+  "name": "Source - Halo oglasi (email)",
+  "description": "Halo saved-search emails (one per municipality) → Claude reads the titles + rates photos → BigQuery → score → same-flat check → Telegram.",
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "86709bc4-ba05-454e-a029-5b25033cb05c",
+      "name": "OnHaloMail",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyHour",
+              "minute": 7
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "sender": "no-reply@halooglasi.com",
+          "readStatus": "both"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "id": "a919ec98-c222-419d-ba15-b156cf14636e",
+      "name": "Manual Test",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        224
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "2ae03aab-fe7a-43af-886f-e90db82516a3",
+      "name": "GetLatestHaloMail",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        224,
+        224
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "getAll",
+        "returnAll": false,
+        "limit": 1,
+        "simple": false,
+        "filters": {
+          "sender": "no-reply@halooglasi.com",
+          "readStatus": "both"
+        },
+        "options": {}
+      },
+      "webhookId": "42abda33-b3bd-49e3-964a-055fceb49ba0",
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "id": "e1b70e3f-2140-4199-ad85-dc2c77966e44",
+      "name": "ParseHaloMail",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Halo saved-search email: the first 5 listings have link, title, price, date and image; the rest are only ids in the \"see all\" link.\n// Size, rooms and municipality are not separate fields in the email; ParseHaloTitles (Claude) reads them from the title. Price limit: 600 €.\nconst dec = s => String(s).replace(/&amp;/g, '&').replace(/&quot;/g, '\"').replace(/&#39;/g, \"'\").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\\s+/g, ' ').trim();\nconst out = [];\nfor (const mail of $input.all()) {\n  const html = String(mail.json.html || '');\n  // Since 19.11. there is one saved search per municipality; its name (\"... - Opština Vračar ...\") is in the email → reliable municipality.\n  const subj = dec(String(mail.json.subject || ''));\n  const pretragaOpstina = ((subj + ' ' + html).match(/Op[sš]tina ([A-Za-zČĆŠĐŽčćšđž]+(?: [A-Za-zČĆŠĐŽčćšđž]+)?)/) || [])[1] || null;\n  const blocks = html.split('<td rowspan=\"3\"').slice(1);\n  for (const b of blocks) {\n    const href = (b.match(/href=\"(https:\\/\\/www\\.halooglasi\\.com\\/nekretnine\\/izdavanje-stanova\\/[^\"?]+)/) || [])[1];\n    if (!href) continue;\n    const hid = href.split('/').pop();\n    const naslov = dec((b.match(/font-size: 15px;[^>]*>([^<]+)<\\/a>/) || [])[1] || 'Halo oglas');\n    const cenaTxt = (b.match(/>\\s*([\\d.]+)\\s*€\\s*</) || [])[1];\n    const cena = cenaTxt ? Number(cenaTxt.replace(/\\./g, '')) : null;\n    const d = b.match(/(\\d{2})\\.(\\d{2})\\.(\\d{4})\\./) || [];\n    const slika = ((b.match(/src=\"(https:\\/\\/img\\.halooglasi\\.com[^\"]+)\"/) || [])[1] || '').replace('.com//', '.com/');\n    out.push({ json: {\n      id: 'halo_' + hid,\n      izvor: 'halo',\n      url: href,\n      naslov,\n      cena,\n      m2: null,\n      sobe: null,\n      opstina: '',\n      naselje: '',\n      namesten: 'nepoznato',\n      placanje: 'month',\n      objavljeno: d.length ? `${d[3]}-${d[2]}-${d[1]}T00:00:00+01:00` : null,\n      slika,\n      upisano: new Date().toISOString(),\n      prosao_filter: cena === null || cena <= 600,\n      pretraga_opstina: pretragaOpstina\n    } });\n  }\n}\nreturn out;",
+        "language": "javaScript",
+        "mode": "runOnceForAllItems"
+      }
+    },
+    {
+      "id": "18fe2b41-c92e-4ac8-9e61-f9f3d2b9a43b",
+      "name": "HaloRemainder",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        320
+      ],
+      "parameters": {
+        "jsCode": "// The email shows only the first 5 listings. For the rest, one message with a button to all new listings on Halo is sent.\n// The link goes into an inline button, not HTML text: Telegram does not parse button URLs, so & in the query string is fine.\nconst out = [];\nfor (const mail of $input.all()) {\n  const html = String(mail.json.html || '');\n  const total = Number((html.match(/pojavilo se <strong>(\\d+)<\\/strong>/) || [])[1] || 0);\n  const shown = (html.match(/<td rowspan=\"3\"/g) || []).length;\n  const all = (html.match(/href=\"(https:\\/\\/www\\.halooglasi\\.com\\/nekretnine\\/izdavanje-stanova\\?[^\"]+)\"/) || [])[1];\n  if (total > shown && all) {\n    const link = all.replace(/&amp;/g, '&').replace(/&utm_[^&]*/g, '');\n    out.push({ json: { text: `📬 Halo: mejl prikazuje ${shown} od ${total} novih oglasa. Ostale otvori dugmetom ispod (mejl za njih nema detalje).`, link } });\n  }\n}\nreturn out;",
+        "language": "javaScript",
+        "mode": "runOnceForAllItems"
+      }
+    },
+    {
+      "id": "18f13c88-d2e8-47aa-861e-33da3666d51a",
+      "name": "SendHaloRemainder",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        896,
+        320
+      ],
+      "parameters": {
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": true
+        },
+        "chatId": "123456789",
+        "operation": "sendMessage",
+        "resource": "message",
+        "text": "={{ $json.text }}",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "additionalFields": {
+                      "url": "={{ $json.link }}"
+                    },
+                    "text": "Svi novi oglasi na Halo"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "replyMarkup": "inlineKeyboard"
+      },
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "b4f73b6f-743d-4aed-bb6c-b1195eef5b53",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "id": "5aa0da80-eea8-4d43-8b46-034c8f602764",
+      "name": "RemoveDuplicateHalo",
+      "type": "n8n-nodes-base.removeDuplicates",
+      "typeVersion": 2,
+      "position": [
+        896,
+        0
+      ],
+      "parameters": {
+        "dedupeValue": "={{ $json.id }}",
+        "operation": "removeItemsSeenInPreviousExecutions",
+        "options": {}
+      }
+    },
+    {
+      "id": "9004ead1-49ac-4ad0-9fc2-041c64a6f4d3",
+      "name": "BuildHaloLoadJob",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2016,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst ndjson = items.map(i => JSON.stringify(i.json)).join('\\n');\nconst metadata = {\n  configuration: {\n    load: {\n      destinationTable: { projectId: 'stan-hunter', datasetId: 'stan_hunter', tableId: 'listings' },\n      sourceFormat: 'NEWLINE_DELIMITED_JSON',\n      writeDisposition: 'WRITE_APPEND',\n      ignoreUnknownValues: true\n    }\n  }\n};\nreturn [{ json: { metadata, ndjson, count: items.length } }];",
+        "language": "javaScript",
+        "mode": "runOnceForAllItems"
+      }
+    },
+    {
+      "id": "2f372067-ff80-4010-99ab-74f12a71aeca",
+      "name": "StartHaloLoadJob",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2240,
+        0
+      ],
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "contentType": "json",
+        "jsonBody": "={{ $json.metadata }}",
+        "method": "POST",
+        "nodeCredentialType": "googleApi",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "https://bigquery.googleapis.com/upload/bigquery/v2/projects/stan-hunter/jobs?uploadType=resumable"
+      },
+      "credentials": {
+        "googleApi": {
+          "name": "Google Service Account account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "c17e4561-0260-4f13-a56b-efc5825becfa",
+      "name": "UploadHaloNdjson",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2464,
+        0
+      ],
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "body": "={{ $('BuildHaloLoadJob').item.json.ndjson }}",
+        "contentType": "raw",
+        "method": "PUT",
+        "nodeCredentialType": "googleApi",
+        "options": {
+          "timeout": 60000
+        },
+        "rawContentType": "application/octet-stream",
+        "sendBody": true,
+        "url": "={{ $json.headers.location }}"
+      },
+      "credentials": {
+        "googleApi": {
+          "name": "Google Service Account account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "135bcbae-550c-47c1-b3ea-c30705b114e7",
+      "name": "FilterHalo",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.4,
+      "position": [
+        3360,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "p1",
+              "leftValue": "={{ $json.prosao_filter }}",
+              "operator": {
+                "operation": "true",
+                "singleValue": true,
+                "type": "boolean"
+              },
+              "rightValue": ""
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "4c4e2c2f-b67c-4954-a733-dae93baf42c0",
+      "name": "SendHaloToTelegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        4928,
+        96
+      ],
+      "parameters": {
+        "additionalFields": {
+          "appendAttribution": false,
+          "caption": "={{ (() => { const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); const j = $json; const ocena = (j.ocena ?? null) !== null ? `\\n⭐ <b>${j.ocena}</b>/100` : ''; const slike = (j.kvalitet ?? null) !== null ? `\\n📸 Slike: ${j.kvalitet}/5${j.kvalitet_opis ? ' – ' + esc(j.kvalitet_opis) : ''}` : ''; const mesto = [j.naselje, j.opstina].filter(Boolean).map(esc).join(', ') || '?'; return `🏠 <b>${j.cena ?? '?'} €</b> · ${j.m2 ?? '?'} m² · ${j.sobe ?? '?'} soba${ocena}\\n📍 ${mesto}${(j.lok ?? null) !== null ? ` (lokacija ${j.lok}/5)` : ''}\\n🛋 Namešten: ${j.namesten}${slike}\\n📝 ${esc(j.naslov)}\\n🌐 halo (mejl)\\n🔗 <a href=\"${esc(j.url)}\">Otvori oglas</a>`; })() }}",
+          "parse_mode": "HTML"
+        },
+        "chatId": "123456789",
+        "file": "={{ $json.slika }}",
+        "operation": "sendPhoto",
+        "resource": "message"
+      },
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "6109cf1e-4f27-495a-93c4-d217becd8cf9",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "id": "3c1ffaaa-5f5a-49ae-8ef4-d83e7f4b2bd9",
+      "name": "ParseHaloTitles",
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        0
+      ],
+      "parameters": {
+        "messages": {
+          "values": [
+            {
+              "content": "={{ JSON.stringify($('RemoveDuplicateHalo').all().map(i => ({ id: i.json.id, naslov: i.json.naslov, cena: i.json.cena, opstina_iz_pretrage: i.json.pretraga_opstina || null }))) }}",
+              "role": "user"
+            }
+          ]
+        },
+        "modelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "claude-haiku-5-5"
+        },
+        "operation": "message",
+        "options": {
+          "includeMergedResponse": true,
+          "maxTokens": 4000,
+          "system": "Dobijaš JSON listu oglasa za izdavanje stanova sa Halo oglasa u Beogradu. Za svaki oglas imaš samo naslov, cenu i (ponekad) opštinu iz sačuvane pretrage. Iz naslova izvuci: opstina (jedna od: Vračar, Zvezdara, Voždovac, Novi Beograd, Stari grad, Savski venac, Palilula, Čukarica, Rakovica, Zemun, ili null), naselje (kratko, npr. \"Blok 4 - Studentski grad\", ili null), m2 (broj ili null; \"37m2\", \"37 m²\", \"37kv\"), sobe (broj ili null; u Halo naslovima \"1.0\", \"1.5\", \"2.0\" posle reči Stan je broj soba), namesten (\"da\", \"polunamešten\", \"ne\" ili \"nepoznato\"). Ako je opština data iz pretrage, ona važi. Poznata mesta smeš da prevedeš u opštinu (npr. SC Olimp i Mirijevo → Zvezdara, Studentski grad i blokovi → Novi Beograd, Dorćol → Stari grad, Banjica → Voždovac). Ne izmišljaj: ako nečega nema u naslovu, null ili \"nepoznato\". Vrati ISKLJUČIVO jedan JSON objekat, bez objašnjenja i bez markdown ograda: {\"oglasi\": [{\"id\": \"...\", \"opstina\": ..., \"naselje\": ..., \"m2\": ..., \"sobe\": ..., \"namesten\": \"...\"}]}"
+        },
+        "resource": "text",
+        "simplify": true
+      },
+      "credentials": {
+        "anthropicApi": {
+          "name": "Anthropic account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "executeOnce": true
+    },
+    {
+      "id": "52b8236d-c2cb-44fd-b24e-bc2ae9a5e383",
+      "name": "ApplyTitles",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Claude's reading of the titles merged into the listings by id; values are validated, anything odd stays unknown.\n// The municipality of the saved search (from the email) wins over Claude. Filter is the same as for the other sources.\nconst base = $('RemoveDuplicateHalo').all();\nconst blocks = Array.isArray($json.content) ? $json.content : [];\nconst raw = String($json.merged_response || blocks.filter(c => c.type === 'text').map(c => c.text).join('') || $json.text || '');\nlet parsed = {};\ntry {\n  const p = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));\n  for (const o of (Array.isArray(p.oglasi) ? p.oglasi : [])) if (o && o.id) parsed[o.id] = o;\n} catch (e) { parsed = {}; }\nconst num = (v, min, max) => { const n = Number(v); return v === null || v === undefined || v === '' || !Number.isFinite(n) || n < min || n > max ? null : n; };\nconst str = v => typeof v === 'string' && v.trim() ? v.trim().slice(0, 60) : '';\nconst NAM = ['da', 'polunamešten', 'ne', 'nepoznato'];\nreturn base.map(({ json: j }) => {\n  const p = parsed[j.id] || {};\n  const { pretraga_opstina, ...rest } = j;\n  const m2 = num(p.m2, 10, 500);\n  const sobe = num(p.sobe, 0.5, 10);\n  const namesten = NAM.includes(p.namesten) ? p.namesten : 'nepoznato';\n  const out = { ...rest, opstina: pretraga_opstina || str(p.opstina), naselje: str(p.naselje), m2, sobe, namesten };\n  out.prosao_filter = (out.cena === null || out.cena <= 600) && (m2 === null || m2 >= 30) && (sobe === null || sobe >= 1.5) && namesten !== 'ne';\n  return { json: out };\n});",
+        "language": "javaScript",
+        "mode": "runOnceForAllItems"
+      }
+    },
+    {
+      "id": "77b5b260-10a2-4951-a4fa-dad19056c892",
+      "name": "RateHaloPhotos",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        1568,
+        0
+      ],
+      "parameters": {
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        },
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "Bf5AqMSpJqScMgxu"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "747dcc8b-c6e1-49d3-9dea-5e8dae46f42c",
+      "name": "ApplyHaloPhotos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1792,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Photo quality from `Enrich - photo quality (Claude vision)` (same sub-workflow as the Orchestrator) merged by id.\n// If the photo step fails or returns nothing, listings continue without it.\nconst photos = {};\nfor (const i of $input.all()) if (i.json && i.json.id && i.json.photo_ok === true) photos[i.json.id] = i.json;\nreturn $('ApplyTitles').all().map(({ json: j }) => {\n  const ph = photos[j.id];\n  return { json: ph ? { ...j, kvalitet: ph.kvalitet ?? null, kvalitet_opis: ph.kvalitet_opis ?? null } : j };\n});",
+        "language": "javaScript",
+        "mode": "runOnceForAllItems"
+      }
+    },
+    {
+      "id": "2b75d38a-8b13-4269-b0de-cd4d1e6a5811",
+      "name": "WaitForHaloLoad",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2688,
+        0
+      ],
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "method": "GET",
+        "nodeCredentialType": "googleApi",
+        "options": {
+          "pagination": {
+            "pagination": {
+              "completeExpression": "={{ $response.body.status?.state === 'DONE' }}",
+              "limitPagesFetched": true,
+              "maxRequests": 10,
+              "paginationCompleteWhen": "other",
+              "paginationMode": "updateAParameterInEachRequest",
+              "parameters": {
+                "parameters": [
+                  {
+                    "name": "poll",
+                    "type": "qs",
+                    "value": "={{ $pageCount }}"
+                  }
+                ]
+              },
+              "requestInterval": 2000
+            }
+          },
+          "timeout": 20000
+        },
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "location",
+              "value": "EU"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "specifyQuery": "keypair",
+        "url": "=https://bigquery.googleapis.com/bigquery/v2/projects/stan-hunter/jobs/{{ $json.jobReference.jobId }}"
+      },
+      "credentials": {
+        "googleApi": {
+          "name": "Google Service Account account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "79b3b87b-0171-46ea-9c46-0d116f29cf85",
+      "name": "GetHaloScores",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2912,
+        0
+      ],
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "contentType": "json",
+        "jsonBody": "={{ { query: 'SELECT id, ocena, lok FROM `stan-hunter.stan_hunter.listings_scored` WHERE id IN UNNEST(@ids)', useLegacySql: false, location: 'EU', timeoutMs: 30000, parameterMode: 'NAMED', queryParameters: [{ name: 'ids', parameterType: { type: 'ARRAY', arrayType: { type: 'STRING' } }, parameterValue: { arrayValues: ($('ApplyHaloPhotos').all().map(i => i.json.id).filter(Boolean).length ? $('ApplyHaloPhotos').all().map(i => i.json.id).filter(Boolean) : ['-']).map(v => ({ value: v })) } }] } }}",
+        "method": "POST",
+        "nodeCredentialType": "googleApi",
+        "options": {
+          "timeout": 45000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/stan-hunter/queries"
+      },
+      "credentials": {
+        "googleApi": {
+          "name": "Google Service Account account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "0698f7b0-db58-4018-9ef2-7a8dabd453e6",
+      "name": "AttachHaloScores",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3136,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// 0–100 score from the view listings_scored (same formula as everywhere). No score (load failed) → message without it.\nconst r = $input.first()?.json ?? {};\nconst fields = (r.schema?.fields || []).map(f => f.name);\nconst scores = {};\nfor (const row of r.rows || []) {\n  const o = Object.fromEntries(row.f.map((c, i) => [fields[i], c.v]));\n  scores[o.id] = { ocena: o.ocena === null ? null : Math.round(Number(o.ocena)), lok: o.lok === null ? null : Number(o.lok) };\n}\nreturn $('ApplyHaloPhotos').all().map(i => ({ json: { ...i.json, ocena: scores[i.json.id]?.ocena ?? null, lok: scores[i.json.id]?.lok ?? null } }));",
+        "language": "javaScript",
+        "mode": "runOnceForAllItems"
+      }
+    },
+    {
+      "id": "8e66e648-47dd-405f-844d-2d2cf0ec5507",
+      "name": "FindSameFlat",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        3584,
+        0
+      ],
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "contentType": "json",
+        "jsonBody": "={{ (() => { const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/\\bopstina\\b/g, '').replace(/\\s+/g, ' ').trim(); const P = (name, type, value) => ({ name, parameterType: { type }, parameterValue: { value: String(value) } }); return { query: \"SELECT id, izvor, url, slika, cena, m2, sobe, opstina, naselje FROM `stan-hunter.stan_hunter.listings_scored` WHERE cena = @cena AND m2 = @m2 AND (@sobe < 0 OR sobe IS NULL OR sobe = @sobe) AND (@opstina = '' OR TRIM(REGEXP_REPLACE(TRANSLATE(LOWER(IFNULL(opstina, '')), 'čćšđž', 'ccsdz'), r'\\\\bopstina\\\\b', '')) = @opstina) AND NOT STARTS_WITH(id, 'halo') AND IFNULL(slika, '') != '' AND upisano > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY) ORDER BY upisano DESC LIMIT 1\", useLegacySql: false, location: 'EU', timeoutMs: 20000, parameterMode: 'NAMED', queryParameters: [P('cena', 'INT64', Math.round(Number($json.cena ?? -1))), P('m2', 'FLOAT64', Number($json.m2 ?? -1)), P('sobe', 'FLOAT64', Number($json.sobe ?? -1)), P('opstina', 'STRING', norm($json.opstina))] }; })() }}",
+        "method": "POST",
+        "nodeCredentialType": "googleApi",
+        "options": {
+          "timeout": 30000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/stan-hunter/queries"
+      },
+      "credentials": {
+        "googleApi": {
+          "name": "Google Service Account account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "be9fba6d-ef51-45bf-8b0e-88a8f6bec1b1",
+      "name": "PickCandidate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3808,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Same flat already in the database from another site? Candidate = same price + m² + rooms + municipality, last 30 days.\n// Claude vision then compares the two cover photos (`Dedup - same flat check`).\nconst L = $('FilterHalo').item.json;\nconst r = $json;\nconst fields = (r.schema?.fields || []).map(f => f.name);\nconst rows = (r.rows || []).map(row => Object.fromEntries(row.f.map((c, i) => [fields[i], c.v])));\nconst cand = rows[0];\nif (!cand) return { json: { listing: L, has_candidate: false } };\nconst num = v => v === null || v === undefined ? null : Number(v);\nreturn { json: { novi: L, postojeci: { ...cand, cena: num(cand.cena), m2: num(cand.m2), sobe: num(cand.sobe) }, has_candidate: true } };",
+        "language": "javaScript",
+        "mode": "runOnceForEachItem"
+      }
+    },
+    {
+      "id": "2dff77b5-09a6-4b1f-80b1-1bfe5cfc5693",
+      "name": "HasCandidate",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4032,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "hc1",
+              "leftValue": "={{ $json.has_candidate }}",
+              "operator": {
+                "operation": "true",
+                "singleValue": true,
+                "type": "boolean"
+              },
+              "rightValue": ""
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "8191c579-83ec-455a-9b16-6c67e8a2717a",
+      "name": "CheckSameFlat",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        4256,
+        -96
+      ],
+      "parameters": {
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        },
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "8bmS1hDZ2lXDudOf"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "e043a3a9-f17f-419f-8e66-7b2f2273c0a1",
+      "name": "ApplySameFlat",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4480,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Verdict back on the listing: dup_isti true → one-line note, otherwise the full message (fail-open).\nconst pick = $('PickCandidate').item.json;\nconst L = pick.novi ?? pick.listing ?? {};\nif (!pick.has_candidate) return { json: { ...L, dup_isti: false } };\nconst c = pick.postojeci;\nreturn { json: { ...L, dup_isti: $json.isti === true, dup_razlog: $json.razlog ?? null, dup_izvor: c.izvor, dup_url: c.url } };",
+        "language": "javaScript",
+        "mode": "runOnceForEachItem"
+      }
+    },
+    {
+      "id": "858e6e46-ab72-4dd7-8e48-ae3dbc660f88",
+      "name": "IsSameFlat",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4704,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "sf1",
+              "leftValue": "={{ $json.dup_isti }}",
+              "operator": {
+                "operation": "true",
+                "singleValue": true,
+                "type": "boolean"
+              },
+              "rightValue": ""
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a98617a9-d10b-4d51-b9a5-cf2dbc6eb33d",
+      "name": "SendHaloDupNote",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        4928,
+        -96
+      ],
+      "parameters": {
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_notification": true,
+          "disable_web_page_preview": true,
+          "parse_mode": "HTML"
+        },
+        "chatId": "123456789",
+        "operation": "sendMessage",
+        "resource": "message",
+        "text": "={{ (() => { const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); const j = $json; return `↪ <b>Isti stan</b> kao <a href=\"${esc(j.dup_url)}\">${esc(j.dup_izvor)} oglas</a>, sada i na halo\\n🏠 ${j.cena ?? '?'} € · ${j.m2 ?? '?'} m² · ${j.sobe ?? '?'} soba${(j.ocena ?? null) !== null ? ` · ⭐ ${j.ocena}/100` : ''}\\n📍 ${esc(j.naselje)}, ${esc(j.opstina)}` + (j.dup_razlog ? `\\n🤖 ${esc(j.dup_razlog)}` : '') + `\\n🔗 <a href=\"${esc(j.url)}\">Otvori (halo)</a>`; })() }}"
+      },
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "2b4d26f1-a224-4748-84b1-b746570d2ebc"
+    }
+  ],
+  "connections": {
+    "Manual Test": {
+      "main": [
+        [
+          {
+            "node": "GetLatestHaloMail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OnHaloMail": {
+      "main": [
+        [
+          {
+            "node": "ParseHaloMail",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "HaloRemainder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GetLatestHaloMail": {
+      "main": [
+        [
+          {
+            "node": "ParseHaloMail",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "HaloRemainder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ParseHaloMail": {
+      "main": [
+        [
+          {
+            "node": "RemoveDuplicateHalo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BuildHaloLoadJob": {
+      "main": [
+        [
+          {
+            "node": "StartHaloLoadJob",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "StartHaloLoadJob": {
+      "main": [
+        [
+          {
+            "node": "UploadHaloNdjson",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HaloRemainder": {
+      "main": [
+        [
+          {
+            "node": "SendHaloRemainder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RemoveDuplicateHalo": {
+      "main": [
+        [
+          {
+            "node": "ParseHaloTitles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ParseHaloTitles": {
+      "main": [
+        [
+          {
+            "node": "ApplyTitles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ApplyTitles": {
+      "main": [
+        [
+          {
+            "node": "RateHaloPhotos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RateHaloPhotos": {
+      "main": [
+        [
+          {
+            "node": "ApplyHaloPhotos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ApplyHaloPhotos": {
+      "main": [
+        [
+          {
+            "node": "BuildHaloLoadJob",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "UploadHaloNdjson": {
+      "main": [
+        [
+          {
+            "node": "WaitForHaloLoad",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WaitForHaloLoad": {
+      "main": [
+        [
+          {
+            "node": "GetHaloScores",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GetHaloScores": {
+      "main": [
+        [
+          {
+            "node": "AttachHaloScores",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AttachHaloScores": {
+      "main": [
+        [
+          {
+            "node": "FilterHalo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FilterHalo": {
+      "main": [
+        [
+          {
+            "node": "FindSameFlat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FindSameFlat": {
+      "main": [
+        [
+          {
+            "node": "PickCandidate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PickCandidate": {
+      "main": [
+        [
+          {
+            "node": "HasCandidate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HasCandidate": {
+      "main": [
+        [
+          {
+            "node": "CheckSameFlat",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "ApplySameFlat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CheckSameFlat": {
+      "main": [
+        [
+          {
+            "node": "ApplySameFlat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ApplySameFlat": {
+      "main": [
+        [
+          {
+            "node": "IsSameFlat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IsSameFlat": {
+      "main": [
+        [
+          {
+            "node": "SendHaloDupNote",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SendHaloToTelegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "errorWorkflow": "UTOIDEVnd1km2Fjp",
+    "timezone": "Europe/Belgrade"
+  },
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  },
+  "nodeGroups": [
+    {
+      "id": "6456c85a-d39e-42f1-bef1-6b28cdb05c20",
+      "name": "Claude: title + photo",
+      "nodeIds": [
+        "3c1ffaaa-5f5a-49ae-8ef4-d83e7f4b2bd9",
+        "52b8236d-c2cb-44fd-b24e-bc2ae9a5e383",
+        "77b5b260-10a2-4951-a4fa-dad19056c892",
+        "747dcc8b-c6e1-49d3-9dea-5e8dae46f42c"
+      ],
+      "description": "Claude reads municipality, m², rooms from the title; cover photo rated by the shared photo sub-workflow"
+    },
+    {
+      "id": "09d74734-7502-4f7c-8053-c33e9db5c086",
+      "name": "BigQuery load + score",
+      "nodeIds": [
+        "9004ead1-49ac-4ad0-9fc2-041c64a6f4d3",
+        "2f372067-ff80-4010-99ab-74f12a71aeca",
+        "c17e4561-0260-4f13-a56b-efc5825becfa",
+        "2b75d38a-8b13-4269-b0de-cd4d1e6a5811",
+        "79b3b87b-0171-46ea-9c46-0d116f29cf85",
+        "0698f7b0-db58-4018-9ef2-7a8dabd453e6"
+      ],
+      "description": "Load job, wait until DONE, 0–100 score from listings_scored"
+    },
+    {
+      "id": "dc60e488-f95d-4b6b-bcb3-f87ed118a709",
+      "name": "Telegram",
+      "nodeIds": [
+        "135bcbae-550c-47c1-b3ea-c30705b114e7",
+        "8e66e648-47dd-405f-844d-2d2cf0ec5507",
+        "be9fba6d-ef51-45bf-8b0e-88a8f6bec1b1",
+        "2dff77b5-09a6-4b1f-80b1-1bfe5cfc5693",
+        "8191c579-83ec-455a-9b16-6c67e8a2717a",
+        "e043a3a9-f17f-419f-8e66-7b2f2273c0a1",
+        "858e6e46-ab72-4dd7-8e48-ae3dbc660f88",
+        "4c4e2c2f-b67c-4954-a733-dae93baf42c0",
+        "a98617a9-d10b-4d51-b9a5-cf2dbc6eb33d"
+      ],
+      "description": "Filter; same flat already on another site (Claude vision) = one-line note, else full message"
+    }
+  ],
+  "sourceWorkflowId": null,
+  "tags": [
+    "source",
+    "stan-hunter"
+  ],
+  "versionMetadata": {
+    "name": "Halo: Claude title parse, photos, score, dedup",
+    "description": "Same message format as the other sources: Claude reads municipality/m2/rooms from the title (saved-search municipality wins), shared photo rating, load job waited for, score from listings_scored, same-flat check via Claude vision."
+  }
+}

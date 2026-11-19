@@ -1,0 +1,406 @@
+{
+  "id": "jwTYaykBV26hWQlG",
+  "name": "Source - 4zida",
+  "description": "Source 4zida: undocumented JSON API /v7/search/apartments, catch-up pagination (until a known id, max 5 pages; allPages for Cleanup) → normalised listing + passes_filter.",
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "0884d668-361c-4a93-bb6b-760c3d2bf1a8",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "e822ed89-7cf7-49b3-9922-a8f01412e4cf",
+      "name": "Fetch4zida",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        672,
+        96
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.4zida.rs/v7/search/apartments",
+        "sendQuery": true,
+        "specifyQuery": "keypair",
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "for",
+              "value": "rent"
+            },
+            {
+              "name": "priceTo",
+              "value": "600"
+            },
+            {
+              "name": "m2From",
+              "value": "30"
+            },
+            {
+              "name": "sort",
+              "value": "createdAtDesc"
+            },
+            {
+              "name": "placeIds",
+              "value": "541"
+            },
+            {
+              "name": "placeIds",
+              "value": "28266"
+            },
+            {
+              "name": "placeIds",
+              "value": "28263"
+            },
+            {
+              "name": "placeIds",
+              "value": "139"
+            },
+            {
+              "name": "placeIds",
+              "value": "28261"
+            },
+            {
+              "name": "placeIds",
+              "value": "213"
+            }
+          ]
+        },
+        "options": {
+          "queryParameterArrays": "brackets",
+          "timeout": 15000,
+          "pagination": {
+            "pagination": {
+              "completeExpression": "={{ (() => { const ads = $response.body.ads || []; return ads.length < 20 || (!$json.all && ads.some(a => $json.known.includes('4zida_' + a.id))); })() }}",
+              "limitPagesFetched": true,
+              "maxRequests": "={{ $json.all ? 10 : 5 }}",
+              "paginationCompleteWhen": "other",
+              "paginationMode": "updateAParameterInEachRequest",
+              "parameters": {
+                "parameters": [
+                  {
+                    "name": "page",
+                    "type": "qs",
+                    "value": "={{ $pageCount + 1 }}"
+                  }
+                ]
+              },
+              "requestInterval": 1000
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "34d61655-3ecd-431e-80b2-a338fce2b749",
+      "name": "Split4zida",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1.1,
+      "position": [
+        896,
+        96
+      ],
+      "parameters": {
+        "fieldToSplitOut": "ads",
+        "options": {}
+      }
+    },
+    {
+      "id": "c5ddef67-2615-4d21-99c6-d49499aa97f5",
+      "name": "Format4zida",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1120,
+        96
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "z-id",
+              "name": "id",
+              "type": "string",
+              "value": "=4zida_{{ $json.id }}"
+            },
+            {
+              "id": "z-izvor",
+              "name": "izvor",
+              "type": "string",
+              "value": "4zida"
+            },
+            {
+              "id": "z-url",
+              "name": "url",
+              "type": "string",
+              "value": "=https://www.4zida.rs{{ $json.urlPath }}"
+            },
+            {
+              "id": "z-naslov",
+              "name": "naslov",
+              "type": "string",
+              "value": "={{ $json.title }}"
+            },
+            {
+              "id": "z-cena",
+              "name": "cena",
+              "type": "number",
+              "value": "={{ $json.price }}"
+            },
+            {
+              "id": "z-m2",
+              "name": "m2",
+              "type": "number",
+              "value": "={{ $json.m2 }}"
+            },
+            {
+              "id": "z-sobe",
+              "name": "sobe",
+              "type": "number",
+              "value": "={{ $json.roomCount ?? null }}"
+            },
+            {
+              "id": "z-opstina",
+              "name": "opstina",
+              "type": "string",
+              "value": "={{ $json.placeTitles[1] }}"
+            },
+            {
+              "id": "z-naselje",
+              "name": "naselje",
+              "type": "string",
+              "value": "={{ $json.placeTitles[0] }}"
+            },
+            {
+              "id": "z-namesten",
+              "name": "namesten",
+              "type": "string",
+              "value": "={{ ({ yes: 'da', semi: 'polunamešten', no: 'ne' })[$json.furnished] ?? 'nepoznato' }}"
+            },
+            {
+              "id": "z-placanje",
+              "name": "placanje",
+              "type": "string",
+              "value": "={{ $json.paymentTerm ?? 'month' }}"
+            },
+            {
+              "id": "z-objavljeno",
+              "name": "objavljeno",
+              "type": "string",
+              "value": "={{ $json.createdAt }}"
+            },
+            {
+              "id": "z-slika",
+              "name": "slika",
+              "type": "string",
+              "value": "={{ $json.image?.search?.['840x0_fill_0_jpeg'] ?? '' }}"
+            },
+            {
+              "id": "z-upisano",
+              "name": "upisano",
+              "type": "string",
+              "value": "={{ $now.toISO() }}"
+            },
+            {
+              "id": "z-filter",
+              "name": "prosao_filter",
+              "type": "boolean",
+              "value": "={{ $json.roomCount >= 1.5 && ($json.paymentTerm ?? 'month') !== 'day' && ($json.furnished ?? 'nepoznato') !== 'no' && $json.price <= 600 && $json.m2 >= 30 }}"
+            },
+            {
+              "id": "z-depozit",
+              "name": "depozit_eur",
+              "type": "number",
+              "value": "={{ $json.descTags?.deposit ?? null }}"
+            },
+            {
+              "id": "z-ljubimci",
+              "name": "kucni_ljubimci",
+              "type": "string",
+              "value": "={{ $json.descTags?.petsAllowed === true ? 'da' : ($json.descTags?.petsAllowed === false ? 'ne' : 'nepoznato') }}"
+            },
+            {
+              "id": "z-provizija",
+              "name": "bez_provizije",
+              "type": "string",
+              "value": "={{ $json.descTags?.commissionFree === true ? 'da' : ($json.descTags?.commissionFree === false ? 'ne' : 'nepoznato') }}"
+            },
+            {
+              "id": "z-oglasivac",
+              "name": "oglasivac",
+              "type": "string",
+              "value": "={{ $json.companyUrlPath ? 'agencija' : 'vlasnik' }}"
+            },
+            {
+              "id": "z-grejanje",
+              "name": "grejanje",
+              "type": "string",
+              "value": "={{ $json.heatingType ?? 'nepoznato' }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "bb9868d4-fed3-4e4a-95e5-c7d05d638eaf",
+      "name": "Manual Test",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        192
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "ea34f65d-206a-459a-aa86-9bd4f97ee5f2",
+      "name": "GetKnownIds",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        224,
+        96
+      ],
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "contentType": "json",
+        "jsonBody": "={{ { query: \"SELECT ARRAY_AGG(DISTINCT id) AS ids FROM `stan-hunter.stan_hunter.listings` WHERE izvor = '4zida'\", useLegacySql: false, location: 'EU', timeoutMs: 30000 } }}",
+        "method": "POST",
+        "nodeCredentialType": "googleApi",
+        "options": {
+          "timeout": 45000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/stan-hunter/queries"
+      },
+      "credentials": {
+        "googleApi": {
+          "name": "Google Service Account account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "c1e2078c-c26c-411f-8d17-f2bbf49335bd",
+      "name": "PrepareFetch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        96
+      ],
+      "parameters": {
+        "jsCode": "// Catch-up pagination: the API is sorted newest first. Normally page 1 is enough, but after downtime (laptop off,\n// night pause) more new listings may exist than fit on one page. Fetch4zida keeps requesting pages until a page contains\n// a listing that is already in BigQuery (max 5 pages). With allPages = true (Cleanup) it reads every page (max 10).\nlet all = false;\ntry { all = $('Execute Workflow Trigger').first().json.allPages === true; } catch (e) { all = false; }\nconst r = $input.first().json;\nconst cell = r.rows?.[0]?.f?.[0]?.v;\nconst known = Array.isArray(cell) ? cell.map(x => x.v) : [];\nreturn [{ json: { all, known, known_ok: !r.error && Array.isArray(cell) } }];",
+        "language": "javaScript",
+        "mode": "runOnceForAllItems"
+      }
+    }
+  ],
+  "connections": {
+    "Fetch4zida": {
+      "main": [
+        [
+          {
+            "node": "Split4zida",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split4zida": {
+      "main": [
+        [
+          {
+            "node": "Format4zida",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "GetKnownIds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Test": {
+      "main": [
+        [
+          {
+            "node": "GetKnownIds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GetKnownIds": {
+      "main": [
+        [
+          {
+            "node": "PrepareFetch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PrepareFetch": {
+      "main": [
+        [
+          {
+            "node": "Fetch4zida",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true
+  },
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  },
+  "nodeGroups": [],
+  "sourceWorkflowId": null,
+  "tags": [
+    "source",
+    "stan-hunter"
+  ],
+  "versionMetadata": {
+    "name": "Comment fix, credential",
+    "description": "Updated nodes: PrepareFetch"
+  }
+}

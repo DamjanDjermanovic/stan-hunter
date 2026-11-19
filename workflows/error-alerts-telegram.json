@@ -1,0 +1,103 @@
+{
+  "id": "UTOIDEVnd1km2Fjp",
+  "name": "Error alerts (Telegram)",
+  "description": "Error Trigger → message without secrets → Telegram, throttled to once per hour per error. Shared error workflow for all Stan Hunter workflows.",
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "627523cf-b807-49ce-b77d-44f032d5d6f7",
+      "name": "OnWorkflowError",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "3ac69ca3-ba96-4fd6-9e67-0e72a5cf8802",
+      "name": "BuildAlert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const e = $input.first().json;\n// The Telegram node sends HTML: <, > and & in the error message (e.g. an HTML error page) would break sending.\nconst esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst clean = s => esc(String(s ?? '').replace(/bot\\d+:[A-Za-z0-9_-]+/g, 'bot***').slice(0, 500));\nconst wf = esc(e.workflow?.name || 'nepoznat workflow');\nconst node = esc(e.execution?.lastNodeExecuted || '?');\nconst msg = clean(e.execution?.error?.message || e.trigger?.error?.message || 'bez poruke');\nconst id = e.execution?.id || '';\n\n// Throttling: the same error (workflow + node + message) at most once per hour.\n// Kept in this workflow's static data; n8n persists it only after production executions.\nconst HOUR = 60 * 60 * 1000;\nconst now = Date.now();\nconst store = $getWorkflowStaticData('global');\nconst alerts = {};\nfor (const [k, v] of Object.entries(store.alerts || {})) {\n  if (now - v.sentAt < 24 * HOUR) alerts[k] = { sentAt: v.sentAt, suppressed: v.suppressed || 0 };\n}\nconst key = `${e.workflow?.id || wf}|${node}|${msg.replace(/\\d{4,}/g, '#').slice(0, 200)}`;\nconst prev = alerts[key];\nif (prev && now - prev.sentAt < HOUR) {\n  alerts[key] = { sentAt: prev.sentAt, suppressed: prev.suppressed + 1 };\n  store.alerts = alerts;\n  return [];\n}\nalerts[key] = { sentAt: now, suppressed: 0 };\nstore.alerts = alerts;\n\nconst repeat = prev && prev.suppressed > 0 ? `\\n🔁 Od prošlog upozorenja ponovilo se još ${prev.suppressed}×` : '';\nconst when = new Date().toLocaleString('sr-RS', { timeZone: 'Europe/Belgrade' });\nconst text = `🚨 Stan Hunter: pukao workflow\\n📦 ${wf}\\n🔧 Node: ${node}\\n💬 ${msg}${repeat}\\n🆔 Execution: ${id}\\n🕒 ${when}`;\nreturn [{ json: { text } }];"
+      }
+    },
+    {
+      "id": "e7a64232-f790-4a75-8f50-a0f9b30fcdcb",
+      "name": "SendAlert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        448,
+        0
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "123456789",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram account"
+        }
+      },
+      "webhookId": "23b37045-5a3b-4865-81d8-dafce2912d8d"
+    }
+  ],
+  "connections": {
+    "OnWorkflowError": {
+      "main": [
+        [
+          {
+            "node": "BuildAlert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BuildAlert": {
+      "main": [
+        [
+          {
+            "node": "SendAlert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true
+  },
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  },
+  "nodeGroups": [],
+  "sourceWorkflowId": null,
+  "tags": [
+    "error-handling",
+    "stan-hunter"
+  ],
+  "versionMetadata": {
+    "name": "English comments",
+    "description": "Updated nodes: BuildAlert"
+  }
+}

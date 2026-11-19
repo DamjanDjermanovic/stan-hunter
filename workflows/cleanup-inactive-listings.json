@@ -1,0 +1,468 @@
+{
+  "id": "T88UxUQVfM8zS8ve",
+  "name": "Cleanup - inactive listings",
+  "description": "Nightly 00:12: check listings in BigQuery (4zida HEAD, CityExpert all search pages, age for Nekretnine.rs/Halo) → backup table → recreate the table without inactive listings. Aborts if >50% look dead.",
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "59ed4d53-f664-4280-8fbe-88fef813f1e6",
+      "name": "Nightly",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 0,
+              "triggerAtMinute": 12
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "e6a91546-7994-49ec-9149-f994945dbb82",
+      "name": "Start",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        224,
+        96
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "18b93044-4a53-4b55-96cb-02fc1371b779",
+      "name": "Manual Test",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        192
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "0147e7b7-586e-4545-baa3-6d5ebd5df16d",
+      "name": "GetListings",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        448,
+        96
+      ],
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "contentType": "json",
+        "jsonBody": "={{ { query: \"SELECT id, ANY_VALUE(url) AS url, ANY_VALUE(izvor) AS izvor, DATE_DIFF(CURRENT_DATE('Europe/Belgrade'), DATE(MIN(upisano), 'Europe/Belgrade'), DAY) AS starost FROM `stan-hunter.stan_hunter.listings` WHERE url IS NOT NULL AND url != '' AND NOT STARTS_WITH(izvor, 'fb') GROUP BY id\", useLegacySql: false, location: 'EU', timeoutMs: 30000, maxResults: 5000 } }}",
+        "method": "POST",
+        "nodeCredentialType": "googleApi",
+        "options": {
+          "timeout": 60000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/stan-hunter/queries"
+      },
+      "credentials": {
+        "googleApi": {
+          "name": "Google Service Account account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "0cad3a95-12df-471e-8912-c024a87da614",
+      "name": "ToItems",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        96
+      ],
+      "parameters": {
+        "jsCode": "// HTTP check only for 4zida: CityExpert returns 200 even for deleted listings, Nekretnine.rs and Halo return 403 (bot protection).\nconst r = $('GetListings').first().json;\nconst fields = (r.schema?.fields || []).map(f => f.name);\nreturn (r.rows || [])\n  .map(row => Object.fromEntries(row.f.map((c, i) => [fields[i], c.v])))\n  .filter(l => l.izvor === '4zida')\n  .map(l => ({ json: l }));",
+        "language": "javaScript",
+        "mode": "runOnceForAllItems"
+      }
+    },
+    {
+      "id": "77dae0a3-bf0f-47db-b08e-14444a3a2f06",
+      "name": "CheckUrl",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        896,
+        96
+      ],
+      "parameters": {
+        "method": "HEAD",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchInterval": 1000,
+              "batchSize": 5
+            }
+          },
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 15000
+        },
+        "url": "={{ $json.url }}"
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "38f2891c-3ff7-43f3-94da-9bf458ed03d9",
+      "name": "Decide",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        96
+      ],
+      "parameters": {
+        "jsCode": "// What counts as inactive:\n// - 4zida: the link returns 404/410 or redirects to a page without the listing id\n// - CityExpert: the listing is not in the current search. Source - CityExpert is called with allPages = true and reads\n//   every page (max 10 × 30); if it hit that limit the list may be incomplete → CityExpert is skipped\n//   (bug on 18.11.: only page 1 was read, so listings on page 2 were deleted)\n// - Nekretnine.rs, Halo: cannot be checked (bot protection, 403) → deleted once they are older than MAX_DANA days\n// DRY_RUN = true: report only, nothing is deleted.\nconst DRY_RUN = false;\nconst MAX_DANA = 21;\nconst CE_MAX = 10 * 30;\nconst q = $('GetListings').first().json;\nconst fields = (q.schema?.fields || []).map(f => f.name);\nconst all = (q.rows || []).map(row => Object.fromEntries(row.f.map((c, i) => [fields[i], c.v])));\nconst dead = [];\nconst bySource = {};\nconst statuses = {};\nconst add = l => { dead.push(l.id); bySource[l.izvor] = (bySource[l.izvor] || 0) + 1; };\n\nconst src = $('ToItems').all().map(i => i.json);\nlet unknown4zida = 0;\n$input.all().forEach((it, i) => {\n  const l = src[i];\n  if (!l) return;\n  const r = it.json;\n  const status = Number(r.statusCode ?? 0);\n  statuses[status] = (statuses[status] || 0) + 1;\n  const key = String(l.id).split('_').slice(1).join('_');\n  const loc = String(r.headers?.location ?? '');\n  if (status === 404 || status === 410) add(l);\n  else if (status >= 300 && status < 400 && loc && !loc.includes(key)) add(l);\n  else if (!(status >= 200 && status < 400)) unknown4zida++;\n});\n\nlet ce = [];\ntry { ce = $('RunCityExpert').all().map(i => i.json); } catch (e) { ce = []; }\nconst ceIds = new Set(ce.map(x => x.id).filter(Boolean));\nconst ceOk = ceIds.size >= 5 && ceIds.size < CE_MAX && !ce.some(x => x.error);\nif (ceOk) all.filter(l => l.izvor === 'cityexpert' && !ceIds.has(l.id)).forEach(add);\n\nconst checked = all.filter(l => l.izvor === '4zida').length + (ceOk ? all.filter(l => l.izvor === 'cityexpert').length : 0);\n// If more than half of the checked listings look \"dead\", the site probably changed its responses → delete nothing.\nif (checked >= 10 && dead.length > checked * 0.5) {\n  throw new Error(`Čišćenje prekinuto: ${dead.length} od ${checked} proverenih oglasa izgleda neaktivno`);\n}\n\n// Nekretnine.rs and Halo: by age (days since first ingest).\nconst unverifiable = all.filter(l => l.izvor === 'nekretnine' || l.izvor === 'halo');\nconst expired = unverifiable.filter(l => Number(l.starost) > MAX_DANA);\nexpired.forEach(add);\nconst unknown = unverifiable.length - expired.length + unknown4zida + (ceOk ? 0 : all.filter(l => l.izvor === 'cityexpert').length);\n\nconst safe = dead.filter(id => /^[A-Za-z0-9_-]+$/.test(id));\nconst list = safe.map(id => `'${id}'`).join(', ');\nconst T = '`stan-hunter.stan_hunter.listings`';\nreturn [{ json: {\n  dry_run: DRY_RUN,\n  checked,\n  dead: safe,\n  expired: expired.length,\n  max_dana: MAX_DANA,\n  unknown,\n  bySource,\n  statuses,\n  cityexpert_aktivnih: ceIds.size,\n  cityexpert_provereno: ceOk,\n  backupQuery: { query: 'CREATE OR REPLACE TABLE `stan-hunter.stan_hunter.listings_backup` AS SELECT * FROM ' + T, useLegacySql: false, location: 'EU', timeoutMs: 60000 },\n  deleteQuery: { query: `CREATE OR REPLACE TABLE ${T} PARTITION BY DATE(upisano) AS SELECT * FROM ${T} WHERE id NOT IN (${list || \"''\"}) QUALIFY ROW_NUMBER() OVER (PARTITION BY id ORDER BY upisano DESC) = 1`, useLegacySql: false, location: 'EU', timeoutMs: 60000 }\n} }];",
+        "language": "javaScript",
+        "mode": "runOnceForAllItems"
+      }
+    },
+    {
+      "id": "737c677f-7ba0-45c6-b209-0cf5dd05a8d7",
+      "name": "HasDead",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1344,
+        96
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "d1",
+              "leftValue": "={{ $json.dead.length > 0 && !$json.dry_run }}",
+              "operator": {
+                "operation": "true",
+                "singleValue": true,
+                "type": "boolean"
+              },
+              "rightValue": ""
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "b3214f10-5938-420f-92bd-afea6770f757",
+      "name": "BackupTable",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1568,
+        0
+      ],
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "contentType": "json",
+        "jsonBody": "={{ $json.backupQuery }}",
+        "method": "POST",
+        "nodeCredentialType": "googleApi",
+        "options": {
+          "timeout": 90000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/stan-hunter/queries"
+      },
+      "credentials": {
+        "googleApi": {
+          "name": "Google Service Account account"
+        }
+      },
+      "disabled": false
+    },
+    {
+      "id": "d2e3cea0-7c07-4a62-b774-be47025a126c",
+      "name": "DeleteDead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1792,
+        0
+      ],
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "contentType": "json",
+        "jsonBody": "={{ $('Decide').first().json.deleteQuery }}",
+        "method": "POST",
+        "nodeCredentialType": "googleApi",
+        "options": {
+          "timeout": 90000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/stan-hunter/queries"
+      },
+      "credentials": {
+        "googleApi": {
+          "name": "Google Service Account account"
+        }
+      },
+      "disabled": false
+    },
+    {
+      "id": "61dfe5cc-6d18-4db7-a796-14b054b17af5",
+      "name": "SendReport",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2016,
+        0
+      ],
+      "parameters": {
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_notification": true
+        },
+        "chatId": "123456789",
+        "operation": "sendMessage",
+        "resource": "message",
+        "text": "={{ (() => { const d = $('Decide').first().json; return '🧹 Noćno čišćenje baze\\nProvereno oglasa: ' + d.checked + '\\nObrisano: ' + d.dead.length + ' (' + Object.entries(d.bySource).map(([k, v]) => k + ' ' + v).join(', ') + ')' + (d.expired ? '\\nOd toga starije od ' + d.max_dana + ' dana (Nekretnine/Halo): ' + d.expired : '') + '\\nNe mogu da se provere, ostaju: ' + d.unknown; })() }}"
+      },
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "8fbc9dd9-0b3e-41cd-866c-810b01b98ad2",
+      "disabled": false
+    },
+    {
+      "id": "7c364e8e-4c07-4b72-99e6-1d7d00ecf4e1",
+      "name": "RunCityExpert",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        336,
+        240
+      ],
+      "parameters": {
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        },
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "ly9pjYMinHLJnJvX"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "9be726e1-e6d0-4d89-b310-d923d2b87082",
+      "name": "AllPages",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        300,
+        260
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ap",
+              "name": "allPages",
+              "type": "boolean",
+              "value": true
+            }
+          ]
+        },
+        "mode": "manual",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Nightly": {
+      "main": [
+        [
+          {
+            "node": "Start",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Test": {
+      "main": [
+        [
+          {
+            "node": "Start",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GetListings": {
+      "main": [
+        [
+          {
+            "node": "ToItems",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ToItems": {
+      "main": [
+        [
+          {
+            "node": "CheckUrl",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CheckUrl": {
+      "main": [
+        [
+          {
+            "node": "Decide",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide": {
+      "main": [
+        [
+          {
+            "node": "HasDead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HasDead": {
+      "main": [
+        [
+          {
+            "node": "BackupTable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BackupTable": {
+      "main": [
+        [
+          {
+            "node": "DeleteDead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DeleteDead": {
+      "main": [
+        [
+          {
+            "node": "SendReport",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RunCityExpert": {
+      "main": [
+        [
+          {
+            "node": "GetListings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "AllPages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AllPages": {
+      "main": [
+        [
+          {
+            "node": "RunCityExpert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "errorWorkflow": "UTOIDEVnd1km2Fjp",
+    "timezone": "Europe/Belgrade"
+  },
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  },
+  "nodeGroups": [],
+  "sourceWorkflowId": null,
+  "tags": [
+    "stan-hunter",
+    "utility"
+  ],
+  "versionMetadata": {
+    "name": "Re-enable delete after dry run",
+    "description": "Updated nodes: BackupTable, DeleteDead, SendReport"
+  }
+}

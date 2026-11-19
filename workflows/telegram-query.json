@@ -1,0 +1,477 @@
+{
+  "id": "760lx7aGzDJ3F89b",
+  "name": "Telegram query",
+  "description": "Question from Telegram → Claude extracts parameters (JSON) → fixed parameterised BigQuery query with a 0–100 score → Claude writes one-line reasons → reply. A message that is a listing returns type 'oglas'.",
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "83aa32ec-d9ff-4a80-9482-b5994677945f",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "55a1ba55-7a1a-45e9-a9c4-8598517d05d6",
+      "name": "QueryInput",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        224,
+        96
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "q-text",
+              "name": "text",
+              "type": "string",
+              "value": "={{ $json.text ?? $json.message?.text ?? \"Daj mi pet najboljih ponuda iz baze\" }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "f7b46657-218d-42f2-98a9-0208141195a4",
+      "name": "Manual Test",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        192
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "06cf13b8-a8d9-4d6d-970b-50df2b8358f3",
+      "name": "ParseRequest",
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        448,
+        96
+      ],
+      "parameters": {
+        "messages": {
+          "values": [
+            {
+              "content": "={{ $json.text }}",
+              "role": "user"
+            }
+          ]
+        },
+        "modelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "claude-haiku-5-5"
+        },
+        "operation": "message",
+        "options": {
+          "includeMergedResponse": true,
+          "maxTokens": 4000,
+          "system": "Ti si parser poruka za Telegram bota koji pretražuje bazu oglasa za izdavanje stanova u Beogradu. Poruka je na srpskom (latinica ili ćirilica). Vrati ISKLJUČIVO jedan JSON objekat, bez objašnjenja i bez markdown ograda, sa poljima: tip (\"upit\" ako korisnik traži oglase iz baze ili pita nešto o njima; \"oglas\" ako je poruka tekst oglasa, tj. neko izdaje ili traži stan; \"ostalo\" za pozdrav, komande poput /start i sve nejasno), broj (koliko oglasa želi, ceo broj od 1 do 10; ako ne kaže, 5), max_cena (najveća mesečna cena u evrima ili null), min_m2 (najmanja kvadratura ili null), min_sobe (najmanji broj soba ili null: garsonjera 0.5, jednosoban 1, jednoiposoban 1.5, dvosoban 2, dvoiposoban 2.5, trosoban 3), opstine (niz opština ili naselja koje pominje, latinicom, npr. [\"Vračar\", \"Dorćol\"], ili [] ako ne pominje nijednu), kucni_ljubimci (true samo ako traži da su ljubimci dozvoljeni), namesten (true samo ako traži namešten stan), samo_filter (false samo ako izričito traži sve oglase bez njegovog filtera, inače true), sortiraj (\"vrednost\" podrazumevano, tj. najbolji odnos cene i kvadrature; \"cena\" za najjeftinije; \"najnovije\"; \"m2\" za najveće), dana (koliko dana unazad, podrazumevano 14, najviše 60). Ne izmišljaj uslove koje korisnik nije naveo."
+        },
+        "resource": "text",
+        "simplify": true
+      },
+      "credentials": {
+        "anthropicApi": {
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "id": "1e20ab32-026b-4af0-aa77-563311ef627e",
+      "name": "BuildQuery",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        96
+      ],
+      "parameters": {
+        "jsCode": "// Claude returns query parameters (JSON). They are validated and clamped here, then a parameterised BigQuery query is built.\n// The LLM never writes SQL: the SQL is fixed and values are passed as query parameters.\n// The 0–100 score and the location score come from the view listings_scored (single source of truth, also used for new-listing messages).\nconst text = $('QueryInput').item.json.text;\nconst blocks = Array.isArray($json.content) ? $json.content : [];\nconst raw = String($json.merged_response || blocks.filter(c => c.type === 'text').map(c => c.text).join('') || '');\nlet p = {};\ntry { p = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)); } catch (e) { p = {}; }\n\nconst tip = ['upit', 'oglas', 'ostalo'].includes(p.tip) ? p.tip : 'ostalo';\nif (tip !== 'upit') {\n  const help = 'Pošalji mi tekst FB oglasa da ga dodam u bazu, ili pitaj, npr.:\\n• Daj mi 5 najboljih ponuda\\n• Najjeftiniji dvosobni na Vračaru do 450 €\\n• Najnoviji oglasi gde su dozvoljeni ljubimci';\n  return { json: { tip, original: text, text: tip === 'ostalo' ? help : '' } };\n}\n\nconst num = (v, def, min, max) => {\n  const n = Number(v);\n  return v === null || v === undefined || v === '' || !Number.isFinite(n) ? def : Math.min(max, Math.max(min, n));\n};\nconst norm = s => String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').trim();\n\nconst broj = Math.round(num(p.broj, 5, 1, 10));\nconst maxCena = Math.round(num(p.max_cena, 100000, 50, 100000));\nconst minM2 = num(p.min_m2, 0, 0, 500);\nconst minSobe = num(p.min_sobe, 0, 0, 10);\nconst dana = Math.round(num(p.dana, 14, 1, 60));\nconst opstine = (Array.isArray(p.opstine) ? p.opstine : []).map(norm).filter(Boolean).slice(0, 10);\nconst ljubimci = p.kucni_ljubimci === true;\nconst namesten = p.namesten === true;\nconst samoFilter = p.samo_filter !== false;\nconst sortiraj = ['vrednost', 'cena', 'najnovije', 'm2'].includes(p.sortiraj) ? p.sortiraj : 'vrednost';\nconst limit = Math.max(broj * 4, 20);\n\nconst sql = [\n  \"SELECT id, izvor, url, naslov, cena, m2, sobe, opstina, naselje, namesten, depozit_eur, kucni_ljubimci, bez_provizije, provizija, rezije_eur, oglasivac, grejanje,\",\n  \"  kvalitet, kvalitet_opis, lok, cena_po_m2, ocena,\",\n  \"  FORMAT_TIMESTAMP('%d.%m.', COALESCE(objavljeno, upisano), 'Europe/Belgrade') AS datum\",\n  \"FROM `stan-hunter.stan_hunter.listings_scored`\",\n  \"WHERE upisano >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @dana DAY)\",\n  \"  AND (NOT @samo_filter OR prosao_filter)\",\n  \"  AND (cena IS NULL OR cena <= @max_cena)\",\n  \"  AND (m2 IS NULL OR m2 >= @min_m2)\",\n  \"  AND (sobe IS NULL OR sobe >= @min_sobe)\",\n  \"  AND (NOT @filter_opstine OR EXISTS (SELECT 1 FROM UNNEST(@opstine) AS o WHERE STRPOS(TRANSLATE(LOWER(CONCAT(IFNULL(opstina, ''), ' ', IFNULL(naselje, ''))), 'čćšđž', 'ccsdz'), o) > 0))\",\n  \"  AND (NOT @ljubimci OR kucni_ljubimci = 'da')\",\n  \"  AND (NOT @namesten OR namesten = 'da')\",\n  \"  AND NOT IFNULL(sumnjiv_oglas, FALSE)\",\n  \"ORDER BY CASE @sortiraj WHEN 'cena' THEN CAST(cena AS FLOAT64) WHEN 'najnovije' THEN -UNIX_SECONDS(COALESCE(objavljeno, upisano)) WHEN 'm2' THEN -m2 ELSE -ocena END ASC NULLS LAST\",\n  \"LIMIT \" + limit\n].join('\\n');\n\nconst P = (name, type, value) => ({ name, parameterType: { type }, parameterValue: { value: String(value) } });\nconst queryParameters = [\n  P('dana', 'INT64', dana),\n  P('samo_filter', 'BOOL', samoFilter),\n  P('max_cena', 'INT64', maxCena),\n  P('min_m2', 'FLOAT64', minM2),\n  P('min_sobe', 'FLOAT64', minSobe),\n  P('filter_opstine', 'BOOL', opstine.length > 0),\n  { name: 'opstine', parameterType: { type: 'ARRAY', arrayType: { type: 'STRING' } }, parameterValue: { arrayValues: (opstine.length ? opstine : ['-']).map(o => ({ value: o })) } },\n  P('ljubimci', 'BOOL', ljubimci),\n  P('namesten', 'BOOL', namesten),\n  P('sortiraj', 'STRING', sortiraj)\n];\n\nconst opis = [\n  `poslednjih ${dana} dana`,\n  samoFilter ? 'prolaze tvoj filter' : 'svi oglasi',\n  maxCena < 100000 ? `do ${maxCena} €` : null,\n  minM2 > 0 ? `od ${minM2} m²` : null,\n  minSobe > 0 ? `sobe ≥ ${minSobe}` : null,\n  opstine.length ? opstine.join(', ') : null,\n  ljubimci ? 'ljubimci dozvoljeni' : null,\n  namesten ? 'namešten' : null,\n  sortiraj === 'vrednost' ? 'redosled: ocena (lokacija 30%, slike 30%, cena 15%, €/m² 10%, veličina 10%, namešten 5%)' : `redosled: ${sortiraj}`\n].filter(Boolean).join(' · ');\n\nreturn { json: { tip, text, broj, sortiraj, opis, request: { query: sql, useLegacySql: false, location: 'EU', parameterMode: 'NAMED', timeoutMs: 20000, queryParameters } } };\n",
+        "language": "javaScript",
+        "mode": "runOnceForEachItem"
+      }
+    },
+    {
+      "id": "a2df42bd-974f-43f8-8407-007f09a0265d",
+      "name": "IsQuery",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        896,
+        96
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "q1",
+              "leftValue": "={{ $json.tip }}",
+              "operator": {
+                "operation": "equals",
+                "type": "string"
+              },
+              "rightValue": "upit"
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "d28dea06-afc4-40a1-9571-c64dbde8bd44",
+      "name": "QueryBigQuery",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1120,
+        0
+      ],
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "contentType": "json",
+        "jsonBody": "={{ $json.request }}",
+        "method": "POST",
+        "nodeCredentialType": "googleApi",
+        "options": {
+          "timeout": 30000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/stan-hunter/queries"
+      },
+      "credentials": {
+        "googleApi": {
+          "name": "Google Service Account account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "id": "081a1ec0-1970-4151-9eb8-c2f564cf6491",
+      "name": "RowsToListings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst q = $('BuildQuery').first().json;\nconst fields = r.schema?.fields || [];\nconst NUM = ['INTEGER', 'INT64', 'FLOAT', 'FLOAT64', 'NUMERIC'];\nconst conv = (v, t) => v === null || v === undefined ? null : NUM.includes(t) ? Number(v) : (t === 'BOOLEAN' || t === 'BOOL') ? v === 'true' : v;\nconst rows = (r.rows || []).map(row => Object.fromEntries(row.f.map((c, i) => [fields[i].name, conv(c.v, fields[i].type)])));\n\n// The same flat is often on several sites (same price, size, rooms and municipality) → keep the first one in database order.\n// Municipality, not neighbourhood: sites name the neighbourhood of the same flat differently.\nconst norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/\\bopstina\\b/g, '').replace(/\\s+/g, ' ').trim();\nconst seen = new Set();\nconst kandidati = rows.filter(k => {\n  const place = norm(k.opstina) || norm(k.naselje);\n  if (k.cena === null || k.m2 === null || !place) return true;\n  const key = `${k.cena}|${k.m2}|${k.sobe ?? '-'}|${place}`;\n  if (seen.has(key)) return false;\n  seen.add(key);\n  return true;\n});\nreturn [{ json: { pitanje: q.text, broj: q.broj, opis: q.opis, kandidati, zavrseno: r.jobComplete !== false } }];\n",
+        "language": "javaScript",
+        "mode": "runOnceForAllItems"
+      }
+    },
+    {
+      "id": "1e79d49d-8a04-4cd4-a5eb-0a8338525b5f",
+      "name": "HasCandidates",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1568,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "h1",
+              "leftValue": "={{ $json.kandidati.length }}",
+              "operator": {
+                "operation": "gt",
+                "type": "number"
+              },
+              "rightValue": 0
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a7b97aa9-67a1-4ff8-b258-7d0f9b1e1b03",
+      "name": "RankWithClaude",
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        1792,
+        -96
+      ],
+      "parameters": {
+        "messages": {
+          "values": [
+            {
+              "content": "={{ JSON.stringify({ pitanje: $json.pitanje, broj: $json.broj, fiksni_redosled: $('BuildQuery').first().json.sortiraj === 'vrednost', kandidati: $json.kandidati.map(k => ({ id: k.id, ocena: k.ocena, lokacija_ocena: k.lok, slike_ocena: k.kvalitet, slike_opis: k.kvalitet_opis, cena: k.cena, m2: k.m2, sobe: k.sobe, cena_po_m2: k.cena_po_m2, mesto: [k.naselje, k.opstina].filter(Boolean).join(', '), namesten: k.namesten, ljubimci: k.kucni_ljubimci, depozit_eur: k.depozit_eur, provizija: k.provizija ?? (k.bez_provizije === 'da' ? 'bez provizije' : null), rezije_eur: k.rezije_eur, oglasivac: k.oglasivac, grejanje: k.grejanje, datum: k.datum, izvor: k.izvor })) }) }}",
+              "role": "user"
+            }
+          ]
+        },
+        "modelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "claude-haiku-5-5"
+        },
+        "operation": "message",
+        "options": {
+          "includeMergedResponse": true,
+          "maxTokens": 4000,
+          "system": "Pomažeš korisniku da izabere stan za izdavanje u Beogradu. Dobijaš JSON sa poljima pitanje, broj, fiksni_redosled i kandidati (oglasi iz baze, već filtrirani i poređani). ocena (0–100) je izračunata formulom: lokacija 30% (lokacija_ocena 1–5, 5 = centar), slike 30% (slike_ocena 1–5 = stanje i opremljenost sa glavne fotografije, null = nepoznato), cena 15%, cena po m² 10%, veličina 10%, namešten 5%. Ako je fiksni_redosled true, izbor su TAČNO prvih broj kandidata, istim redosledom; tvoj posao je samo razlog. Ako je false, izaberi najviše broj kandidata koji najbolje odgovaraju pitanju, poređane od najboljeg. Vrati ISKLJUČIVO jedan JSON objekat, bez objašnjenja i bez markdown ograda: {\"izbor\": [{\"id\": \"...\", \"razlog\": \"...\"}]}. razlog je jedna kratka rečenica na srpskom latinicom, isključivo ekavica (namešten, ne namješten; mesto, ne mjesto), najviše 15 reči; pomeni lokaciju kad je dobra ili loša, stanje sa slika kad je poznato (staro ili renovirano), i šta oglas izdvaja (npr. provizija ili režije ako su poznate). Iznose piši sa znakom € iza broja (npr. 450 €, 9 €/m²), nikad EUR. Sme da koristi samo podatke iz liste. Koristi samo id-jeve iz liste i ne izmišljaj podatke."
+        },
+        "resource": "text",
+        "simplify": true
+      },
+      "credentials": {
+        "anthropicApi": {
+          "name": "Anthropic account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "d8cd1be9-ed05-495a-8d39-16c372030f49",
+      "name": "FormatReply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2016,
+        -96
+      ],
+      "parameters": {
+        "jsCode": "const data = $('RowsToListings').first().json;\nconst q = $('BuildQuery').first().json;\nconst byId = Object.fromEntries(data.kandidati.map(k => [k.id, k]));\nconst blocks = Array.isArray($json.content) ? $json.content : [];\nconst raw = String($json.merged_response || blocks.filter(c => c.type === 'text').map(c => c.text).join('') || '');\nlet izbor = [];\ntry {\n  const p = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));\n  izbor = Array.isArray(p.izbor) ? p.izbor : [];\n} catch (e) { izbor = []; }\nconst seen = new Set();\nizbor = izbor.filter(x => x && byId[x.id] && !seen.has(x.id) && seen.add(x.id));\nconst claudeOk = izbor.length > 0;\nif (q.sortiraj === 'vrednost') {\n  // Order comes from the database formula (score 0–100); Claude only writes the reason.\n  const razlozi = Object.fromEntries(izbor.map(x => [x.id, x.razlog]));\n  izbor = data.kandidati.slice(0, data.broj).map(k => ({ id: k.id, razlog: razlozi[k.id] || '' }));\n} else {\n  izbor = izbor.slice(0, data.broj);\n  if (!claudeOk) izbor = data.kandidati.slice(0, data.broj).map(k => ({ id: k.id, razlog: '' }));\n}\n\n// The model sometimes mixes a Cyrillic letter into Latin text → transliterate.\nconst CYR = { 'а':'a','б':'b','в':'v','г':'g','д':'d','ђ':'đ','е':'e','ж':'ž','з':'z','и':'i','ј':'j','к':'k','л':'l','љ':'lj','м':'m','н':'n','њ':'nj','о':'o','п':'p','р':'r','с':'s','т':'t','ћ':'ć','у':'u','ф':'f','х':'h','ц':'c','ч':'č','џ':'dž','ш':'š' };\nconst lat = s => String(s).replace(/[Ѐ-ӿ]/g, ch => {\n  const low = ch.toLowerCase();\n  const t = CYR[low] ?? '';\n  return ch === low ? t : t.charAt(0).toUpperCase() + t.slice(1);\n});\n// If the model still writes EUR/evra → €.\nconst euro = s => String(s).replace(/\\s*\\b(EUR|eur|evra|evro)\\b/g, ' €').replace(/\\s+€/g, ' €');\n\n// Telegram HTML: everything from the database and from Claude is escaped. Numbers are always printed from the database.\n// The rank goes next to the address and the price on the next line, so \"1. 400 €\" doesn't read as 1.400 €.\nconst esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;');\nconst v = (n, suf = '') => (n === null || n === undefined || n === '') ? '?' : `${n}${suf}`;\nconst lines = izbor.map((x, i) => {\n  const k = byId[x.id];\n  const mesto = esc([k.naselje, k.opstina].filter(Boolean).join(', ') || k.naslov || '?');\n  const cena = `💶 <b>${v(k.cena, ' €')}</b> · ${v(k.m2, ' m²')} · ${v(k.sobe)} sobe` + (k.cena_po_m2 ? ` · ${k.cena_po_m2} €/m²` : '');\n  const info = [\n    k.ocena !== null && k.ocena !== undefined ? `⭐ ${k.ocena}/100 (lokacija ${k.lok}/5)` : null,\n    k.kvalitet !== null && k.kvalitet !== undefined ? `📸 ${k.kvalitet}/5` : null,\n    k.namesten && k.namesten !== 'nepoznato' ? `namešten: ${esc(k.namesten)}` : null,\n    k.datum ? `od ${esc(k.datum)}` : null,\n    esc(k.izvor)\n  ].filter(Boolean).join(' · ');\n  const link = k.url ? `<a href=\"${esc(k.url)}\">Otvori oglas</a>` : '(FB oglas, bez linka)';\n  const razlog = x.razlog ? `\\n👉 ${esc(euro(lat(x.razlog)).slice(0, 160))}` : '';\n  return `<b>${i + 1}) ${mesto}</b>\\n${cena}\\n${info}${razlog}\\n${link}`;\n});\nconst header = `🏆 <b>Top ${izbor.length} iz baze</b>\\n<i>${esc(data.opis)}</i>`;\nconst note = claudeOk ? '' : '\\n\\n<i>Claude nije odgovorio, pa nema razloga uz oglase.</i>';\n\n// Buttons \"❌ N\": the listing with that number no longer exists → Telegram intake deletes it from the table.\n// callback_data is limited to 64 bytes.\nconst buttons = izbor\n  .map((x, i) => ({ text: `❌ ${i + 1}`, callback_data: `del:${x.id}` }))\n  .filter(b => /^del:[A-Za-z0-9_-]{1,60}$/.test(b.callback_data));\nconst footer = buttons.length ? '\\n\\n<i>❌ N = oglas pod tim brojem više ne postoji (briše se iz baze)</i>' : '';\nconst reply_markup = buttons.length ? { inline_keyboard: [buttons] } : null;\nreturn [{ json: { tip: 'upit', text: `${header}\\n\\n${lines.join('\\n\\n')}${note}${footer}`, reply_markup } }];\n",
+        "language": "javaScript",
+        "mode": "runOnceForAllItems"
+      }
+    },
+    {
+      "id": "833a57cb-3929-4cc0-b3f6-ade6b46561a3",
+      "name": "NoResults",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1792,
+        112
+      ],
+      "parameters": {
+        "jsCode": "const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst d = $input.first().json;\nconst text = d.zavrseno\n  ? `Nema oglasa u bazi za te uslove (${esc(d.opis)}). Probaj šire: veći budžet, više dana ili bez opštine.`\n  : 'BigQuery upit je trajao predugo. Probaj ponovo za minut.';\nreturn [{ json: { tip: 'upit', text } }];",
+        "language": "javaScript",
+        "mode": "runOnceForAllItems"
+      }
+    },
+    {
+      "id": "efad3e21-90ad-4500-9958-dcb5ded5704e",
+      "name": "NotAQuery",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        240
+      ],
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "QueryInput",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Test": {
+      "main": [
+        [
+          {
+            "node": "QueryInput",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "QueryInput": {
+      "main": [
+        [
+          {
+            "node": "ParseRequest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ParseRequest": {
+      "main": [
+        [
+          {
+            "node": "BuildQuery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BuildQuery": {
+      "main": [
+        [
+          {
+            "node": "IsQuery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IsQuery": {
+      "main": [
+        [
+          {
+            "node": "QueryBigQuery",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "NotAQuery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "QueryBigQuery": {
+      "main": [
+        [
+          {
+            "node": "RowsToListings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RowsToListings": {
+      "main": [
+        [
+          {
+            "node": "HasCandidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HasCandidates": {
+      "main": [
+        [
+          {
+            "node": "RankWithClaude",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "NoResults",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RankWithClaude": {
+      "main": [
+        [
+          {
+            "node": "FormatReply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "errorWorkflow": "UTOIDEVnd1km2Fjp",
+    "timezone": "Europe/Belgrade"
+  },
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  },
+  "nodeGroups": [
+    {
+      "id": "78b3f662-ea40-4245-a15f-da613f80d8c2",
+      "name": "Claude parameters",
+      "nodeIds": [
+        "06cf13b8-a8d9-4d6d-970b-50df2b8358f3",
+        "1e20ab32-026b-4af0-aa77-563311ef627e"
+      ],
+      "description": "Claude turns the question into JSON parameters; code validates them and builds a parameterised query (the LLM never writes SQL)"
+    },
+    {
+      "id": "10e9c165-d6a0-4396-b8fe-81f88928ed35",
+      "name": "BigQuery query",
+      "nodeIds": [
+        "d28dea06-afc4-40a1-9571-c64dbde8bd44",
+        "081a1ec0-1970-4151-9eb8-c2f564cf6491"
+      ],
+      "description": "jobs.query with named parameters → rows to objects"
+    },
+    {
+      "id": "9a7548f8-d6a2-4fdc-b5a4-ea6be3a0c4c2",
+      "name": "Claude reasons",
+      "nodeIds": [
+        "a7b97aa9-67a1-4ff8-b258-7d0f9b1e1b03",
+        "d8cd1be9-ed05-495a-8d39-16c372030f49"
+      ],
+      "description": "Fixed order from the score; Claude writes the reason; every number comes from the database"
+    }
+  ],
+  "sourceWorkflowId": null,
+  "tags": [
+    "intake",
+    "llm",
+    "stan-hunter"
+  ],
+  "versionMetadata": {
+    "name": "Merge same flat by municipality, not neighbourhood",
+    "description": "Updated nodes: RowsToListings"
+  }
+}

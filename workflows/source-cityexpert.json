@@ -1,0 +1,354 @@
+{
+  "id": "ly9pjYMinHLJnJvX",
+  "name": "Source - CityExpert",
+  "description": "Source CityExpert: JSON API from the Angular transfer state (/api/Search), catch-up pagination (until a known id, max 5 pages; allPages for Cleanup) → normalised listing + passes_filter.",
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "648cf9ff-bb28-4154-b813-5031c8fb362c",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "4e8e1f0e-5cbd-40c3-8683-e2540fe3b595",
+      "name": "FetchCityExpert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        672,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://cityexpert.rs/api/Search",
+        "sendQuery": true,
+        "specifyQuery": "keypair",
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "req",
+              "value": "={{ JSON.stringify({ cityId: 1, rentOrSale: 'r', searchSource: 'regular', sort: 'datedsc', maxPrice: 600, minSize: 30, polygonsArray: ['Vračar', 'Zvezdara', 'Voždovac', 'Novi Beograd', 'Dorćol', 'Savski venac', 'Centar'] }) }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0 Safari/537.36"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "pagination": {
+            "pagination": {
+              "completeExpression": "={{ !$response.body.info?.hasNextPage || (!$json.all && ($response.body.result || []).some(p => $json.known.includes('cityexpert_' + p.propId))) }}",
+              "limitPagesFetched": true,
+              "maxRequests": "={{ $json.all ? 10 : 5 }}",
+              "paginationCompleteWhen": "other",
+              "paginationMode": "updateAParameterInEachRequest",
+              "parameters": {
+                "parameters": [
+                  {
+                    "name": "req",
+                    "type": "qs",
+                    "value": "={{ JSON.stringify({ cityId: 1, rentOrSale: 'r', searchSource: 'regular', sort: 'datedsc', maxPrice: 600, minSize: 30, polygonsArray: ['Vračar', 'Zvezdara', 'Voždovac', 'Novi Beograd', 'Dorćol', 'Savski venac', 'Centar'], currentPage: $pageCount + 1 }) }}"
+                  }
+                ]
+              },
+              "requestInterval": 1000
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "75262724-a9f6-4353-bb21-2208a90dad38",
+      "name": "SplitCityExpert",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1.1,
+      "position": [
+        896,
+        0
+      ],
+      "parameters": {
+        "fieldToSplitOut": "result",
+        "options": {}
+      }
+    },
+    {
+      "id": "8d26755b-827a-4bc5-ba9b-a124ba7155e6",
+      "name": "FormatCityExpert",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1120,
+        0
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ce-id",
+              "name": "id",
+              "value": "=cityexpert_{{ $json.propId }}",
+              "type": "string"
+            },
+            {
+              "id": "ce-izvor",
+              "name": "izvor",
+              "value": "cityexpert",
+              "type": "string"
+            },
+            {
+              "id": "ce-url",
+              "name": "url",
+              "value": "={{ (() => { const s = x => String(x ?? '').toLowerCase().replace(/đ/g, 'dj').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''); const n = parseFloat($json.structure); const st = isNaN(n) ? null : ({ '0.5': 'garsonjera', '1.0': 'jednosoban', '1.5': 'jednoiposoban', '2.0': 'dvosoban', '2.5': 'dvoiposoban', '3.0': 'trosoban', '3.5': 'troiposoban', '4.0': 'cetvorosoban', '4.5': 'cetvoroiposoban' })[n.toFixed(1)]; return 'https://cityexpert.rs/izdavanje-nekretnina/beograd/' + $json.propId + (st ? '/' + [st, 'stan', s($json.street), s($json.municipality)].filter(Boolean).join('-') : ''); })() }}",
+              "type": "string"
+            },
+            {
+              "id": "ce-naslov",
+              "name": "naslov",
+              "value": "={{ $json.street }}",
+              "type": "string"
+            },
+            {
+              "id": "ce-cena",
+              "name": "cena",
+              "value": "={{ $json.price }}",
+              "type": "number"
+            },
+            {
+              "id": "ce-m2",
+              "name": "m2",
+              "value": "={{ $json.size }}",
+              "type": "number"
+            },
+            {
+              "id": "ce-sobe",
+              "name": "sobe",
+              "value": "={{ isNaN(parseFloat($json.structure)) ? null : parseFloat($json.structure) }}",
+              "type": "number"
+            },
+            {
+              "id": "ce-opstina",
+              "name": "opstina",
+              "value": "={{ $json.municipality }}",
+              "type": "string"
+            },
+            {
+              "id": "ce-naselje",
+              "name": "naselje",
+              "value": "={{ $json.polygons?.[1] ?? $json.polygons?.[0] ?? $json.municipality }}",
+              "type": "string"
+            },
+            {
+              "id": "ce-namesten",
+              "name": "namesten",
+              "value": "={{ ({ 1: 'da', 2: 'polunamešten', 3: 'ne' })[$json.furnished] ?? 'nepoznato' }}",
+              "type": "string"
+            },
+            {
+              "id": "ce-placanje",
+              "name": "placanje",
+              "value": "month",
+              "type": "string"
+            },
+            {
+              "id": "ce-objavljeno",
+              "name": "objavljeno",
+              "value": "={{ $json.firstPublished }}",
+              "type": "string"
+            },
+            {
+              "id": "ce-slika",
+              "name": "slika",
+              "value": "={{ $json.coverPhoto ? `https://img.cityexpert.rs/properties/470x/${Math.floor($json.propId / 1000) * 1000}/${$json.propId}/slike/${$json.coverPhoto}@jpg` : \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "ce-upisano",
+              "name": "upisano",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            },
+            {
+              "id": "ce-filter",
+              "name": "prosao_filter",
+              "value": "={{ (isNaN(parseFloat($json.structure)) || parseFloat($json.structure) >= 1.5) && $json.furnished !== 3 && $json.price <= 600 && $json.size >= 30 }}",
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "f6c58ad6-3452-406b-8ee1-dbf93129b800",
+      "name": "Manual Test",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        160
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "0bd7c694-6ef5-44e3-9ae1-ff9d34280b27",
+      "name": "GetKnownIds",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        224,
+        0
+      ],
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "contentType": "json",
+        "jsonBody": "={{ { query: \"SELECT ARRAY_AGG(DISTINCT id) AS ids FROM `stan-hunter.stan_hunter.listings` WHERE izvor = 'cityexpert'\", useLegacySql: false, location: 'EU', timeoutMs: 30000 } }}",
+        "method": "POST",
+        "nodeCredentialType": "googleApi",
+        "options": {
+          "timeout": 45000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/stan-hunter/queries"
+      },
+      "credentials": {
+        "googleApi": {
+          "name": "Google Service Account account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "d43bea37-9af0-4773-bc56-cd165d33dfcc",
+      "name": "PrepareFetch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Catch-up pagination: the search is sorted newest first, 30 per page. Normally page 1 is enough, but after downtime\n// (laptop off, night pause) more new listings may exist than fit on one page. FetchCityExpert keeps requesting pages\n// until a page contains a listing already in BigQuery (max 5). With allPages = true (Cleanup) it reads every page (max 10).\nlet all = false;\ntry { all = $('Execute Workflow Trigger').first().json.allPages === true; } catch (e) { all = false; }\nconst r = $input.first().json;\nconst cell = r.rows?.[0]?.f?.[0]?.v;\nconst known = Array.isArray(cell) ? cell.map(x => x.v) : [];\nreturn [{ json: { all, known, known_ok: !r.error && Array.isArray(cell) } }];",
+        "language": "javaScript",
+        "mode": "runOnceForAllItems"
+      }
+    }
+  ],
+  "connections": {
+    "FetchCityExpert": {
+      "main": [
+        [
+          {
+            "node": "SplitCityExpert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SplitCityExpert": {
+      "main": [
+        [
+          {
+            "node": "FormatCityExpert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "GetKnownIds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Test": {
+      "main": [
+        [
+          {
+            "node": "GetKnownIds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GetKnownIds": {
+      "main": [
+        [
+          {
+            "node": "PrepareFetch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PrepareFetch": {
+      "main": [
+        [
+          {
+            "node": "FetchCityExpert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "saveManualExecutions": true
+  },
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  },
+  "nodeGroups": [],
+  "sourceWorkflowId": null,
+  "tags": [
+    "source",
+    "stan-hunter"
+  ],
+  "versionMetadata": {
+    "name": "Fix upisano (was overwritten by the filter expression), filter 600",
+    "description": "Updated nodes: FormatCityExpert"
+  }
+}

@@ -1,0 +1,392 @@
+{
+  "id": "8bmS1hDZ2lXDudOf",
+  "name": "Dedup - same flat check (Claude vision)",
+  "description": "Two listings whose fingerprint collides (price + m2 + rooms + municipality) → Claude vision compares the photos (or FB screenshot vs cover photo) → isti true/false/null. Unclear = null, caller sends normally (fail-open).",
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "3389220a-edc7-4ad6-a1b6-9d450d79f081",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        224,
+        272
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "cd029088-0c9c-4bc9-93e3-70803a0c14c6",
+      "name": "PrepareCompare",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        176
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Input: { novi, postojeci } (two listings) + optional binary \"data\" = screenshot of the new listing (FB).\n// Compared only when both sides have an image; otherwise isti = null and the caller treats it as \"not the same\" (fail-open).\nconst { novi = {}, postojeci = {} } = $json;\nconst isUrl = u => /^https:\\/\\//.test(String(u || ''));\nconst hasScreenshot = !!$input.item.binary?.data;\nconst canCompare = isUrl(postojeci.slika) && (hasScreenshot || isUrl(novi.slika));\nconst opis = l => [l.cena != null ? l.cena + ' €' : null, l.m2 != null ? l.m2 + ' m²' : null, l.sobe != null ? l.sobe + ' soba' : null, [l.naselje, l.opstina].filter(Boolean).join(', ') || null, l.izvor || null].filter(Boolean).join(' · ');\nconst prvaSlika = hasScreenshot ? 'Prva slika je screenshot Facebook objave oglasa A (gledaj fotografije stana u njoj, ne tekst).' : 'Prva slika je naslovna fotografija oglasa A.';\nconst prompt = [\n  'Uporedi dva oglasa za izdavanje stana u Beogradu. ' + prvaSlika + ' Druga slika je naslovna fotografija oglasa B.',\n  'A: ' + opis(novi),\n  'B: ' + opis(postojeci),\n  'Pitanje: da li je to ISTI stan (isti prostor), a ne samo sličan stan? Isti stan = vide se isti predmeti i prostor: isti nameštaj, tepisi, prozori, podovi, zidovi, raspored. Različite fotografije istog stana su isti stan ako se vide isti predmeti. Sličan stil ili ista zgrada nije dovoljno. Ako nisi siguran, isti = false.',\n  'Vrati ISKLJUČIVO jedan JSON objekat, bez objašnjenja i bez markdown ograda: {\"isti\": true ili false, \"sigurnost\": broj 0-1, \"razlog\": \"najviše 12 reči na srpskom, latinica, ekavica\"}'\n].join('\\n');\nreturn { json: { novi, postojeci, prompt, urls: [novi.slika, postojeci.slika].join(','), has_screenshot: hasScreenshot, can_compare: canCompare }, binary: $input.item.binary };"
+      }
+    },
+    {
+      "id": "40f1088e-b2e3-4fd7-9bb0-bde31035e99b",
+      "name": "Manual Test",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        80
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "d53c1a95-8b9a-44ce-bf85-43a20cba792c",
+      "name": "SamplePairs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        80
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Test pairs: the same Vračar flat on 4zida and Nekretnine.rs (expected: same), and two different flats with the same price (expected: different).\nconst a = { id: '4zida_6afdebf9d16a4237430ff712', izvor: '4zida', url: 'https://www.4zida.rs/izdavanje-stanova/pravni-fakultet-vracar-vracar-beograd/dvosoban-stan/6afdebf9d16a4237430ff712', slika: 'https://resizer2.4zida.rs/SIEFR8TpGa4fdlS0xYjIA4w5d6MSpM-8YBpp006nRXA/rs:fill:840:0:0/bG9jYWw6Ly8vNmFmZGViZjlkMTZhNDIzNzQzMGZmNzEyLzAwNTcxZDBmOTk.jpeg', cena: 500, m2: 75, sobe: 2, opstina: 'Vračar', naselje: 'Pravni fakultet - Vračar' };\nconst b = { id: 'nekretnine_1674755', izvor: 'nekretnine', url: 'https://www.nekretnine.rs/oglasi/1674755/', slika: 'https://pic.nekretnine.rs/image/21374143/xxl.jpg', cena: 500, m2: 75, sobe: 2, opstina: 'Vračar', naselje: 'Hram Svetog Save - Neimar - Čubura' };\nconst c = { id: 'cityexpert_43463', izvor: 'cityexpert', url: 'https://cityexpert.rs/izdavanje-nekretnina/beograd/43463/jednoiposoban-stan-cerska-vracar', slika: 'https://img.cityexpert.rs/properties/470x/43000/43463/slike/cityexpert.rs_-_nekretnina_id_-_43463_-_0019_-_20210506.jpg@jpg', cena: 500, m2: 31, sobe: 1.5, opstina: 'Vračar', naselje: 'Čubura' };\nreturn [{ json: { novi: b, postojeci: a } }, { json: { novi: c, postojeci: a } }];"
+      }
+    },
+    {
+      "id": "93a56e6e-4014-4679-88f2-6e6c121f3b20",
+      "name": "CanCompare",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        672,
+        176
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.can_compare }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "caf88b28-f540-45f1-b691-37ad6092b637",
+      "name": "HasScreenshot",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        896,
+        96
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.has_screenshot }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "13138608-d80c-46e7-9f58-62ac258f998a",
+      "name": "DownloadExisting",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.postojeci.slika }}",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "b"
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "3e9d9d3b-0109-466c-9e6f-d1c2b7822b2a",
+      "name": "MergeImages",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Screenshot (data) + downloaded cover photo of the existing listing (b) on one item, so Claude gets both images in one call.\n// Claude only accepts image/jpeg|png|gif|webp, and some CDNs answer with octet-stream → the type is fixed here.\nconst prep = $('PrepareCompare').item;\nconst b = $input.item.binary?.b;\nif (!b) return { json: { ...prep.json, can_compare: false, download_error: String($json.error?.message ?? 'no image').slice(0, 200) } };\nconst fix = x => ({ ...x, mimeType: /^image\\/(jpeg|png|gif|webp)$/.test(x.mimeType || '') ? x.mimeType : 'image/jpeg' });\nreturn { json: prep.json, binary: { data: fix(prep.binary.data), b: fix(b) } };"
+      }
+    },
+    {
+      "id": "a3fb9566-410d-489c-be1e-7a420c922bd0",
+      "name": "CompareScreenshot",
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        1568,
+        0
+      ],
+      "parameters": {
+        "resource": "image",
+        "operation": "analyze",
+        "modelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "claude-haiku-5-5"
+        },
+        "inputType": "binary",
+        "binaryPropertyName": "data,b",
+        "text": "={{ $json.prompt }}",
+        "simplify": true,
+        "options": {
+          "maxTokens": 4000
+        }
+      },
+      "credentials": {
+        "anthropicApi": {
+          "name": "Anthropic account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "92939a8f-6c88-4397-bf2a-2f037e936d52",
+      "name": "ParseCompare",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1792,
+        192
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Claude's answer → { isti: true | false | null, sigurnost, razlog }. \"Same\" only with confidence >= 0.7.\n// Anything unclear (no images, API error, unparseable JSON) → isti = null, and the caller sends the listing normally.\nconst prep = $('PrepareCompare').item.json;\nif ($json.can_compare === false || $json.download_error) {\n  return { json: { novi: prep.novi, postojeci: prep.postojeci, isti: null, sigurnost: null, razlog: $json.download_error ? 'slika nije preuzeta' : 'nema slika za poređenje' } };\n}\nconst blocks = Array.isArray($json.content) ? $json.content : [];\nconst raw = String($json.merged_response || blocks.filter(c => c.type === 'text').map(c => c.text).join('') || $json.text || '');\nlet p = null;\ntry { p = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)); } catch (e) { p = null; }\nconst CYR = { 'а':'a','б':'b','в':'v','г':'g','д':'d','ђ':'đ','е':'e','ж':'ž','з':'z','и':'i','ј':'j','к':'k','л':'l','љ':'lj','м':'m','н':'n','њ':'nj','о':'o','п':'p','р':'r','с':'s','т':'t','ћ':'ć','у':'u','ф':'f','х':'h','ц':'c','ч':'č','џ':'dž','ш':'š' };\nconst lat = t => t.replace(/[\\u0400-\\u04FF]/g, ch => { const low = ch.toLowerCase(); const r = CYR[low] ?? ''; return ch === low ? r : r.charAt(0).toUpperCase() + r.slice(1); });\nif (!p || typeof p.isti !== 'boolean') {\n  return { json: { novi: prep.novi, postojeci: prep.postojeci, isti: null, sigurnost: null, razlog: 'Claude odgovor nije čitljiv', greska: String($json.error?.message ?? raw.slice(0, 120)).slice(0, 200) } };\n}\nconst sig = Number.isFinite(Number(p.sigurnost)) ? Math.min(1, Math.max(0, Number(p.sigurnost))) : 0;\nconst razlog = typeof p.razlog === 'string' ? lat(p.razlog.trim()).slice(0, 120) : null;\nreturn { json: { novi: prep.novi, postojeci: prep.postojeci, isti: p.isti === true && sig >= 0.7, sigurnost: sig, razlog } };"
+      }
+    },
+    {
+      "id": "8b6cf1b3-481c-4c2f-bd84-1fa15e54cc4a",
+      "name": "CompareUrls",
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        1568,
+        192
+      ],
+      "parameters": {
+        "resource": "image",
+        "operation": "analyze",
+        "modelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "claude-haiku-5-5"
+        },
+        "inputType": "url",
+        "imageUrls": "={{ $json.urls }}",
+        "text": "={{ $json.prompt }}",
+        "simplify": true,
+        "options": {
+          "maxTokens": 4000
+        }
+      },
+      "credentials": {
+        "anthropicApi": {
+          "name": "Anthropic account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "PrepareCompare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PrepareCompare": {
+      "main": [
+        [
+          {
+            "node": "CanCompare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Test": {
+      "main": [
+        [
+          {
+            "node": "SamplePairs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SamplePairs": {
+      "main": [
+        [
+          {
+            "node": "PrepareCompare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CanCompare": {
+      "main": [
+        [
+          {
+            "node": "HasScreenshot",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "ParseCompare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HasScreenshot": {
+      "main": [
+        [
+          {
+            "node": "DownloadExisting",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "CompareUrls",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DownloadExisting": {
+      "main": [
+        [
+          {
+            "node": "MergeImages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MergeImages": {
+      "main": [
+        [
+          {
+            "node": "CompareScreenshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CompareScreenshot": {
+      "main": [
+        [
+          {
+            "node": "ParseCompare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CompareUrls": {
+      "main": [
+        [
+          {
+            "node": "ParseCompare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "errorWorkflow": "UTOIDEVnd1km2Fjp",
+    "timezone": "Europe/Belgrade",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  },
+  "nodeGroups": [],
+  "sourceWorkflowId": null,
+  "tags": [
+    "llm",
+    "stan-hunter"
+  ],
+  "versionMetadata": {
+    "name": "Initial: Claude vision same-flat check",
+    "description": "Created with 11 nodes: Execute Workflow Trigger, PrepareCompare, Manual Test, SamplePairs, CanCompare and 6 more"
+  }
+}

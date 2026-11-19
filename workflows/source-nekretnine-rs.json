@@ -1,0 +1,384 @@
+{
+  "id": "jefrXjfqueYB5NiV",
+  "name": "Source - Nekretnine.rs",
+  "description": "Source Nekretnine.rs: SSR HTML → __NEXT_DATA__ JSON → normalised listing + passes_filter.",
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "cf3aa89c-9604-4d90-abc5-bc2371885f7a",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "fff8da11-e364-4634-bbf7-59459da19e7f",
+      "name": "FetchNekretnine",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        224,
+        96
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://www.nekretnine.rs/izdavanje-stanova/beograd/",
+        "sendQuery": true,
+        "specifyQuery": "keypair",
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "prezzoMassimo",
+              "value": "600"
+            },
+            {
+              "name": "superficieMinima",
+              "value": "30"
+            },
+            {
+              "name": "criterio",
+              "value": "data"
+            },
+            {
+              "name": "ordine",
+              "value": "desc"
+            },
+            {
+              "name": "idMZona[0]",
+              "value": "36"
+            },
+            {
+              "name": "idMZona[1]",
+              "value": "20"
+            },
+            {
+              "name": "idMZona[2]",
+              "value": "2"
+            },
+            {
+              "name": "idMZona[3]",
+              "value": "7"
+            },
+            {
+              "name": "idMZona[4]",
+              "value": "39"
+            },
+            {
+              "name": "idMZona[5]",
+              "value": "35"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "text/html"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "sr-RS,sr;q=0.9,en;q=0.8"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0 Safari/537.36"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "outputPropertyName": "data",
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "75481f4d-f1cc-4e81-a804-df99a7386d7a",
+      "name": "Manual Test",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        192
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "396c5a8b-53c7-4cfd-b2c9-af04cbfe5649",
+      "name": "ExtractNextData",
+      "type": "n8n-nodes-base.html",
+      "typeVersion": 1.2,
+      "position": [
+        448,
+        0
+      ],
+      "parameters": {
+        "dataPropertyName": "data",
+        "extractionValues": {
+          "values": [
+            {
+              "cssSelector": "script#__NEXT_DATA__",
+              "key": "nextData",
+              "returnArray": false,
+              "returnValue": "html"
+            }
+          ]
+        },
+        "operation": "extractHtmlContent",
+        "options": {
+          "cleanUpText": false,
+          "trimValues": true
+        },
+        "sourceData": "json"
+      }
+    },
+    {
+      "id": "e246fd0a-b299-4bfe-b791-9318e7bff431",
+      "name": "ParseResults",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        672,
+        0
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "nk-results",
+              "name": "results",
+              "type": "array",
+              "value": "={{ JSON.parse($json.nextData).props.pageProps.dehydratedState.queries.find(q => q.queryKey?.[0] === 'real-estate-list')?.state?.data?.results ?? [] }}"
+            }
+          ]
+        },
+        "mode": "manual",
+        "options": {}
+      }
+    },
+    {
+      "id": "1a419636-ad19-4b6f-8b9e-a1bb1f40391f",
+      "name": "SplitNekretnine",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1.1,
+      "position": [
+        896,
+        0
+      ],
+      "parameters": {
+        "fieldToSplitOut": "results",
+        "options": {}
+      }
+    },
+    {
+      "id": "15dfef3b-d7f3-44ac-89ad-ed896c59e059",
+      "name": "FormatNekretnine",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1120,
+        0
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "nk-id",
+              "name": "id",
+              "type": "string",
+              "value": "=nekretnine_{{ $json.realEstate.id }}"
+            },
+            {
+              "id": "nk-izvor",
+              "name": "izvor",
+              "type": "string",
+              "value": "nekretnine"
+            },
+            {
+              "id": "nk-url",
+              "name": "url",
+              "type": "string",
+              "value": "={{ $json.seo?.url ?? `https://www.nekretnine.rs/oglasi/${$json.realEstate.id}/` }}"
+            },
+            {
+              "id": "nk-naslov",
+              "name": "naslov",
+              "type": "string",
+              "value": "={{ $json.realEstate.title }}"
+            },
+            {
+              "id": "nk-cena",
+              "name": "cena",
+              "type": "number",
+              "value": "={{ $json.realEstate.price?.value ?? null }}"
+            },
+            {
+              "id": "nk-m2",
+              "name": "m2",
+              "type": "number",
+              "value": "={{ parseFloat($json.realEstate.properties?.[0]?.surface ?? '') || null }}"
+            },
+            {
+              "id": "nk-sobe",
+              "name": "sobe",
+              "type": "number",
+              "value": "={{ parseFloat($json.realEstate.properties?.[0]?.rooms ?? '') || null }}"
+            },
+            {
+              "id": "nk-opstina",
+              "name": "opstina",
+              "type": "string",
+              "value": "={{ $json.realEstate.properties?.[0]?.location?.macrozone ?? '' }}"
+            },
+            {
+              "id": "nk-naselje",
+              "name": "naselje",
+              "type": "string",
+              "value": "={{ $json.realEstate.properties?.[0]?.location?.microzone ?? '' }}"
+            },
+            {
+              "id": "nk-namesten",
+              "name": "namesten",
+              "type": "string",
+              "value": "nepoznato"
+            },
+            {
+              "id": "nk-placanje",
+              "name": "placanje",
+              "type": "string",
+              "value": "month"
+            },
+            {
+              "id": "nk-objavljeno",
+              "name": "objavljeno",
+              "type": "string",
+              "value": "={{ null }}"
+            },
+            {
+              "id": "nk-slika",
+              "name": "slika",
+              "type": "string",
+              "value": "={{ $json.realEstate.properties?.[0]?.photo?.urls?.large ?? $json.realEstate.properties?.[0]?.photo?.urls?.medium ?? '' }}"
+            },
+            {
+              "id": "nk-upisano",
+              "name": "upisano",
+              "type": "string",
+              "value": "={{ $now.toISO() }}"
+            },
+            {
+              "id": "nk-filter",
+              "name": "prosao_filter",
+              "type": "boolean",
+              "value": "={{ (() => { const p = $json.realEstate.properties?.[0] ?? {}; const c = $json.realEstate.price?.value; const m = parseFloat(p.surface ?? ''); const s = parseFloat(p.rooms ?? ''); return c > 0 && c <= 600 && m >= 30 && (isNaN(s) || s >= 1.5); })() }}"
+            }
+          ]
+        },
+        "mode": "manual",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "FetchNekretnine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Test": {
+      "main": [
+        [
+          {
+            "node": "FetchNekretnine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FetchNekretnine": {
+      "main": [
+        [
+          {
+            "node": "ExtractNextData",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ExtractNextData": {
+      "main": [
+        [
+          {
+            "node": "ParseResults",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ParseResults": {
+      "main": [
+        [
+          {
+            "node": "SplitNekretnine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SplitNekretnine": {
+      "main": [
+        [
+          {
+            "node": "FormatNekretnine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true
+  },
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  },
+  "nodeGroups": [],
+  "sourceWorkflowId": null,
+  "tags": [
+    "source",
+    "stan-hunter"
+  ],
+  "versionMetadata": {
+    "name": "Prag cene 600 €",
+    "description": "Updated nodes: FetchNekretnine, FormatNekretnine"
+  }
+}

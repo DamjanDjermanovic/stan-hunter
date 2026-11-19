@@ -1,0 +1,413 @@
+{
+  "id": "WsEZZMDpbESVf4s1",
+  "name": "Source - Halo oglasi",
+  "description": "Disabled. Halo listing page via HTML node (CSS selectors). Blocked by Cloudflare from n8n, replaced by the email source.",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "89fd9058-83cb-48ac-8b6d-5d40b99c3d00",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "1b75d112-8577-40b1-8f89-be2fc36913fe",
+      "name": "FetchHalo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        224,
+        96
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://www.halooglasi.com/nekretnine/izdavanje-stanova/beograd",
+        "sendQuery": true,
+        "specifyQuery": "keypair",
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "grad_id_l-lokacija_id_l-mikrolokacija_id_l",
+              "value": "40784,40788,40783,40574,40776,40772"
+            },
+            {
+              "name": "cena_d_to",
+              "value": "500"
+            },
+            {
+              "name": "cena_d_unit",
+              "value": "4"
+            },
+            {
+              "name": "kvadratura_d_from",
+              "value": "30"
+            },
+            {
+              "name": "kvadratura_d_unit",
+              "value": "1"
+            },
+            {
+              "name": "sort",
+              "value": "ValidFromForDisplay"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "text/html"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "sr-RS,sr;q=0.9,en;q=0.8"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0 Safari/537.36"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "1a51f3d8-7a38-4863-b020-9844a4c118f2",
+      "name": "ExtractHaloCards",
+      "type": "n8n-nodes-base.html",
+      "typeVersion": 1.2,
+      "position": [
+        448,
+        96
+      ],
+      "parameters": {
+        "operation": "extractHtmlContent",
+        "sourceData": "json",
+        "dataPropertyName": "data",
+        "extractionValues": {
+          "values": [
+            {
+              "key": "cards",
+              "cssSelector": ".product-list-item[data-id]",
+              "returnValue": "html",
+              "returnArray": true
+            }
+          ]
+        },
+        "options": {
+          "trimValues": true,
+          "cleanUpText": true
+        }
+      }
+    },
+    {
+      "id": "3c764cb4-7ead-4078-b8f0-7b15441d53cf",
+      "name": "SplitHaloCards",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1.1,
+      "position": [
+        672,
+        96
+      ],
+      "parameters": {
+        "fieldToSplitOut": "cards",
+        "destinationFieldName": "card",
+        "options": {}
+      }
+    },
+    {
+      "id": "c0a7c5a0-161f-4d22-afa2-c177502ebd44",
+      "name": "ExtractHaloFields",
+      "type": "n8n-nodes-base.html",
+      "typeVersion": 1.2,
+      "position": [
+        896,
+        96
+      ],
+      "parameters": {
+        "operation": "extractHtmlContent",
+        "sourceData": "json",
+        "dataPropertyName": "card",
+        "extractionValues": {
+          "values": [
+            {
+              "key": "href",
+              "cssSelector": "h3.product-title a",
+              "returnValue": "attribute",
+              "attribute": "href",
+              "returnArray": false
+            },
+            {
+              "key": "naslov",
+              "cssSelector": "h3.product-title a",
+              "returnValue": "text",
+              "returnArray": false
+            },
+            {
+              "key": "cena",
+              "cssSelector": ".central-feature span",
+              "returnValue": "attribute",
+              "attribute": "data-value",
+              "returnArray": false
+            },
+            {
+              "key": "features",
+              "cssSelector": ".product-features .value-wrapper",
+              "returnValue": "text",
+              "returnArray": true
+            },
+            {
+              "key": "mesta",
+              "cssSelector": ".subtitle-places li",
+              "returnValue": "text",
+              "returnArray": true
+            },
+            {
+              "key": "slika",
+              "cssSelector": "figure img",
+              "returnValue": "attribute",
+              "attribute": "src",
+              "returnArray": false
+            },
+            {
+              "key": "datum",
+              "cssSelector": ".publish-date",
+              "returnValue": "text",
+              "returnArray": false
+            }
+          ]
+        },
+        "options": {
+          "trimValues": true,
+          "cleanUpText": true
+        }
+      }
+    },
+    {
+      "id": "539557bf-554b-4822-a92b-746a7b184fb6",
+      "name": "FormatHalo",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1120,
+        96
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "h-id",
+              "name": "id",
+              "value": "=halo_{{ $json.href.split('?')[0].split('/').pop() }}",
+              "type": "string"
+            },
+            {
+              "id": "h-izvor",
+              "name": "izvor",
+              "value": "halooglasi",
+              "type": "string"
+            },
+            {
+              "id": "h-url",
+              "name": "url",
+              "value": "=https://www.halooglasi.com{{ $json.href.split('?')[0] }}",
+              "type": "string"
+            },
+            {
+              "id": "h-naslov",
+              "name": "naslov",
+              "value": "={{ $json.naslov }}",
+              "type": "string"
+            },
+            {
+              "id": "h-cena",
+              "name": "cena",
+              "value": "={{ parseInt(String($json.cena ?? '').replace(/\\./g, '')) || null }}",
+              "type": "number"
+            },
+            {
+              "id": "h-m2",
+              "name": "m2",
+              "value": "={{ parseFloat(($json.features ?? []).find(f => f.includes('Kvadratura')) ?? '') || null }}",
+              "type": "number"
+            },
+            {
+              "id": "h-sobe",
+              "name": "sobe",
+              "value": "={{ parseFloat(($json.features ?? []).find(f => f.includes('Broj soba')) ?? '') || null }}",
+              "type": "number"
+            },
+            {
+              "id": "h-opstina",
+              "name": "opstina",
+              "value": "={{ ($json.mesta?.[1] ?? '').replace(/^Opština\\s*/, '') }}",
+              "type": "string"
+            },
+            {
+              "id": "h-naselje",
+              "name": "naselje",
+              "value": "={{ $json.mesta?.[2] ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "h-namesten",
+              "name": "namesten",
+              "value": "nepoznato",
+              "type": "string"
+            },
+            {
+              "id": "h-placanje",
+              "name": "placanje",
+              "value": "month",
+              "type": "string"
+            },
+            {
+              "id": "h-objavljeno",
+              "name": "objavljeno",
+              "value": "={{ $json.datum ? DateTime.fromFormat($json.datum.replace(/\\.$/, ''), 'dd.MM.yyyy', { zone: 'Europe/Belgrade' }).toISO() : null }}",
+              "type": "string"
+            },
+            {
+              "id": "h-slika",
+              "name": "slika",
+              "value": "={{ $json.slika ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "h-upisano",
+              "name": "upisano",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            },
+            {
+              "id": "h-filter",
+              "name": "prosao_filter",
+              "value": "={{ (() => { const c = parseInt(String($json.cena ?? '').replace(/\\./g, '')); const m = parseFloat(($json.features ?? []).find(f => f.includes('Kvadratura')) ?? ''); const s = parseFloat(($json.features ?? []).find(f => f.includes('Broj soba')) ?? ''); return c > 0 && c <= 500 && m >= 30 && (isNaN(s) || s >= 1.5); })() }}",
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "1aa866ae-6421-4643-808a-b2b36f724b3d",
+      "name": "Manual Test",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        192
+      ],
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "FetchHalo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FetchHalo": {
+      "main": [
+        [
+          {
+            "node": "ExtractHaloCards",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ExtractHaloCards": {
+      "main": [
+        [
+          {
+            "node": "SplitHaloCards",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SplitHaloCards": {
+      "main": [
+        [
+          {
+            "node": "ExtractHaloFields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ExtractHaloFields": {
+      "main": [
+        [
+          {
+            "node": "FormatHalo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Test": {
+      "main": [
+        [
+          {
+            "node": "FetchHalo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true
+  },
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  },
+  "nodeGroups": [],
+  "sourceWorkflowId": null,
+  "tags": [
+    "source",
+    "stan-hunter"
+  ],
+  "versionMetadata": {
+    "name": "Halo oglasi sub-workflow v1 (HTML scraping)",
+    "description": "Created with 7 nodes: Execute Workflow Trigger, FetchHalo, ExtractHaloCards, SplitHaloCards, ExtractHaloFields and 2 more"
+  }
+}

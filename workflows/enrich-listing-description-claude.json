@@ -1,0 +1,328 @@
+{
+  "id": "f78u3VESIFSb2eG8",
+  "name": "Enrich - listing description (Claude)",
+  "description": "New 4zida listings that pass the filter → listing page → description text → Claude (JSON): agency fee, utilities, min. lease, deposit, furnished, pets, scam flag. Returns only id + fields; the Orchestrator merges them.",
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "1becec01-4e36-4252-b4d9-f07ae3172a7a",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "a0aaea59-a96c-46f0-8bf9-8c8a8607df75",
+      "name": "SelectForEnrich",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        100
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Descriptions are read only from sites that serve the listing page (4zida). Nekretnine.rs and Halo return 403 → not attempted.\n// Only listings that pass the filter (the ones the user reads), at most 10 per run (fewer requests to the site, fewer tokens).\nconst MAX = 10;\nreturn $input.all()\n  .filter(i => i.json.izvor === '4zida' && i.json.prosao_filter === true && /^https:\\/\\/www\\.4zida\\.rs\\//.test(i.json.url || ''))\n  .slice(0, MAX)\n  .map(i => ({ json: { id: i.json.id, url: i.json.url, cena: i.json.cena ?? null, m2: i.json.m2 ?? null, sobe: i.json.sobe ?? null, naselje: i.json.naselje ?? null, opstina: i.json.opstina ?? null, oglasivac: i.json.oglasivac ?? null } }));"
+      }
+    },
+    {
+      "id": "912d0693-476c-4575-ac42-29b3f290f833",
+      "name": "FetchAdPage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        100
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.url }}",
+        "options": {
+          "timeout": 20000,
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 1000
+            }
+          },
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "outputPropertyName": "html"
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "6caf0a2a-bfac-408e-a1f5-416b0b58ddbd",
+      "name": "ExtractDescription",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        100
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "mode": "runOnceForEachItem",
+        "jsCode": "// 4zida (Next.js SSR): the description text is in the HTML after the \"Opis oglasa\" heading. Only that part is kept, without phone numbers or the agent's name.\nconst base = $('SelectForEnrich').item.json;\nconst html = String($json.html ?? '');\nconst i = html.indexOf('Opis oglasa');\nlet opis = '';\nif (i >= 0) {\n  opis = html.slice(i + 'Opis oglasa'.length, i + 30000)\n    .replace(/<script[\\s\\S]*?<\\/script>/g, ' ')\n    .replace(/<style[\\s\\S]*?<\\/style>/g, ' ')\n    .replace(/<br\\s*\\/?>/gi, '\\n')\n    .replace(/<[^>]+>/g, ' ')\n    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&quot;/g, '\"').replace(/&#x27;|&#39;/g, \"'\").replace(/&lt;/g, '<').replace(/&gt;/g, '>');\n  const stops = ['Prikaži više', 'Prikaži manje', 'Slični oglasi', 'Cena posmatrane', 'self.__next_f'];\n  const cut = Math.min(...stops.map(s => opis.indexOf(s)).filter(n => n >= 0), opis.length);\n  opis = opis.slice(0, cut)\n    .replace(/Agent:[\\s\\S]*$/, '')\n    .replace(/Prikaži\\s*[\\d\\s\\/+*-]{3,}\\.{0,3}/g, '')\n    .replace(/\\+?\\d[\\d\\s\\/-]{7,}\\d/g, '[telefon]')\n    .replace(/[ \\t]+/g, ' ').replace(/\\s*\\n\\s*/g, '\\n').trim()\n    .slice(0, 3000);\n}\nreturn { json: { ...base, opis, http_greska: $json.error ? String($json.error.message ?? $json.error).slice(0, 200) : null } };"
+      }
+    },
+    {
+      "id": "c556c929-af92-440a-a9f8-fd4a7bf53047",
+      "name": "HasDescription",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "opis",
+              "leftValue": "={{ $json.opis.length }}",
+              "rightValue": 20,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "2e66b658-30e4-4741-9c1d-181cbb64994e",
+      "name": "ExtractWithClaude",
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        100
+      ],
+      "parameters": {
+        "resource": "text",
+        "operation": "message",
+        "modelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "claude-haiku-5-5"
+        },
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "={{ JSON.stringify({ cena: $json.cena, m2: $json.m2, sobe: $json.sobe, mesto: [$json.naselje, $json.opstina].filter(Boolean).join(', '), oglasivac: $json.oglasivac, opis: $json.opis }) }}"
+            }
+          ]
+        },
+        "simplify": true,
+        "options": {
+          "includeMergedResponse": true,
+          "maxTokens": 4000,
+          "system": "Ti si parser opisa oglasa za izdavanje stanova u Beogradu. Dobijaš JSON: cena (€ mesečno), m2, sobe, mesto, oglasivac (agencija/vlasnik) i opis (slobodan tekst sa sajta, srpski). Iz OPISA izvuci podatke koji menjaju pravu cenu stana. Vrati ISKLJUČIVO jedan JSON objekat, bez objašnjenja i bez markdown ograda, sa tačno ovim poljima: provizija (kratak tekst kako je navedeno, npr. \"50% prve kirije\", \"jedna kirija\", \"bez provizije\", \"po opštim uslovima agencije\"; null ako opis ne pominje proviziju), rezije_eur (procena ukupnih mesečnih režija u evrima, samo ako opis navodi iznos ili raspon za infostan, struju, grejanje ili zajednicu; zaokruži na ceo broj; RSD/dinare preračunaj po kursu 117; ako su režije uračunate u cenu napiši 0; inače null), min_period_meseci (najkraći zakup u mesecima ako je naveden, npr. \"na duži period\" je null, \"minimum godinu dana\" je 12; inače null), depozit_eur (iznos depozita u evrima; \"jedna kirija\" = iznos cene; null ako nije naveden), namesten (\"da\", \"polunamešten\", \"ne\" ili \"nepoznato\"; \"delimično opremljen\" = \"polunamešten\"), kucni_ljubimci (\"da\", \"ne\" ili \"nepoznato\"), sumnjiv_oglas (boolean), sumnjiv_razlog (jedna kratka rečenica na srpskom ili null). Sumnjiv je oglas SAMO ako opis traži uplatu ili avans pre razgledanja, nudi razgledanje samo na daljinu (vlasnik u inostranstvu, ključevi poštom), traži lične dokumente unapred, ili je cena nerealno niska za veličinu i lokaciju (npr. ispod 4 €/m² u centru). Agencijska provizija, depozit i obična agencijska reklama NISU razlog za sumnju. Ne izmišljaj: ako nečega nema u opisu, null ili \"nepoznato\". Ne prepisuj brojeve telefona ni imena."
+        }
+      },
+      "credentials": {
+        "anthropicApi": {
+          "name": "Anthropic account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "8153be47-1adc-406b-8509-900e22f326da",
+      "name": "ParseExtraction",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        100
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Claude returns JSON → validate types and ranges. Output: only id + extracted fields; the Orchestrator merges them into the original listing.\nconst base = $('ExtractDescription').item.json;\nconst blocks = Array.isArray($json.content) ? $json.content : [];\nconst raw = String($json.merged_response || blocks.filter(c => c.type === 'text').map(c => c.text).join('') || '');\nlet p = null;\ntry { p = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)); } catch (e) { p = null; }\nif (!p) return { json: { id: base.id, enrich_ok: false, enrich_greska: ($json.error ? String($json.error.message ?? $json.error) : 'neispravan JSON: ' + raw.slice(0, 120)).slice(0, 200) } };\n\nconst numOrNull = (v, min, max) => { const n = Number(v); return v === null || v === undefined || v === '' || !Number.isFinite(n) || n < min || n > max ? null : Math.round(n); };\nconst pick = (v, allowed) => allowed.includes(v) ? v : 'nepoznato';\nconst txt = (v, max) => (typeof v === 'string' && v.trim()) ? v.trim().slice(0, max) : null;\nconst sumnjiv = p.sumnjiv_oglas === true;\nreturn { json: {\n  id: base.id,\n  enrich_ok: true,\n  provizija: txt(p.provizija, 80),\n  rezije_eur: numOrNull(p.rezije_eur, 0, 1000),\n  min_period_meseci: numOrNull(p.min_period_meseci, 1, 60),\n  depozit_eur: numOrNull(p.depozit_eur, 0, 5000),\n  namesten: pick(p.namesten, ['da', 'polunamešten', 'ne']),\n  kucni_ljubimci: pick(p.kucni_ljubimci, ['da', 'ne']),\n  sumnjiv_oglas: sumnjiv,\n  sumnjiv_razlog: sumnjiv ? txt(p.sumnjiv_razlog, 200) : null\n} };"
+      }
+    },
+    {
+      "id": "4bee2704-97ae-488a-92ee-576c347b01ff",
+      "name": "Manual Test",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        200
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "9344a81d-82b2-4f94-81a9-f622253eb520",
+      "name": "SampleListings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        200
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Manual test only: sample 4zida listings\nreturn [\n  { json: { id: '4zida_6afb84a9bcf091b06d0db31b', izvor: '4zida', prosao_filter: true, cena: 450, m2: 30, sobe: 1, naselje: 'Kalenić', opstina: 'Vračar', oglasivac: 'agencija', url: 'https://www.4zida.rs/izdavanje-stanova/kalenic-vracar-beograd/jednosoban-stan/6afb84a9bcf091b06d0db31b' } },\n  { json: { id: '4zida_6aec7072f52cf90a210c3af3', izvor: '4zida', prosao_filter: true, cena: 500, m2: 35, sobe: 1, naselje: 'Neimar', opstina: 'Vračar', oglasivac: 'agencija', url: 'https://www.4zida.rs/izdavanje-stanova/neimar-vracar-beograd/jednosoban-stan/6aec7072f52cf90a210c3af3' } },\n  { json: { id: 'cityexpert_1', izvor: 'cityexpert', prosao_filter: true, url: 'https://cityexpert.rs/x' } }\n];"
+      }
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "SelectForEnrich",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SelectForEnrich": {
+      "main": [
+        [
+          {
+            "node": "FetchAdPage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FetchAdPage": {
+      "main": [
+        [
+          {
+            "node": "ExtractDescription",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ExtractWithClaude": {
+      "main": [
+        [
+          {
+            "node": "ParseExtraction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Test": {
+      "main": [
+        [
+          {
+            "node": "SampleListings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SampleListings": {
+      "main": [
+        [
+          {
+            "node": "SelectForEnrich",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HasDescription": {
+      "main": [
+        [
+          {
+            "node": "ExtractWithClaude",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ExtractDescription": {
+      "main": [
+        [
+          {
+            "node": "HasDescription",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "errorWorkflow": "UTOIDEVnd1km2Fjp",
+    "timezone": "Europe/Belgrade"
+  },
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  },
+  "nodeGroups": [
+    {
+      "id": "5d5f7891-f632-4fd1-a7a6-beb019a28bb8",
+      "name": "Description from site",
+      "nodeIds": [
+        "a0aaea59-a96c-46f0-8bf9-8c8a8607df75",
+        "912d0693-476c-4575-ac42-29b3f290f833",
+        "6caf0a2a-bfac-408e-a1f5-416b0b58ddbd",
+        "c556c929-af92-440a-a9f8-fd4a7bf53047"
+      ],
+      "description": "4zida + passes filter only, max 10; GET the page (1 s apart) → description text without phone numbers"
+    },
+    {
+      "id": "d8ac3619-6a9f-475e-a423-ee311957b931",
+      "name": "Claude extraction",
+      "nodeIds": [
+        "2e66b658-30e4-4741-9c1d-181cbb64994e",
+        "8153be47-1adc-406b-8509-900e22f326da"
+      ],
+      "description": "JSON schema → type checks; output = id + fields"
+    }
+  ],
+  "sourceWorkflowId": null,
+  "tags": [
+    "llm",
+    "stan-hunter"
+  ],
+  "versionMetadata": {
+    "name": "maxTokens 4000",
+    "description": "Updated nodes: ExtractWithClaude"
+  }
+}

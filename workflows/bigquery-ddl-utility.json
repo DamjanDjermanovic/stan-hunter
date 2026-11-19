@@ -1,0 +1,116 @@
+{
+  "id": "2npIAKQZNkqaoKNS",
+  "name": "BigQuery DDL utility",
+  "description": "Manual BigQuery DDL/maintenance queries (the sandbox has no DML, so changes use ALTER / CREATE OR REPLACE).",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "cd425a25-843a-4260-906e-a99ca991f658",
+      "name": "Manual Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "f9b6c191-dd3a-4b4a-9185-1caa89c1e3f8",
+      "name": "RunBigQueryDdl",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        224,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/stan-hunter/queries",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {
+          "timeout": 90000,
+          "batching": {
+            "batch": {
+              "batchInterval": 500,
+              "batchSize": 1
+            }
+          }
+        },
+        "position": [
+          336,
+          0
+        ]
+      },
+      "credentials": {
+        "googleApi": {
+          "name": "Google Service Account account"
+        }
+      }
+    },
+    {
+      "id": "15b992cf-ae57-4aa6-9e30-6fbe5bb9ab53",
+      "name": "Queries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        112,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Queries for manual runs, executed in order (the BigQuery sandbox has no DML → deletes are done with CREATE OR REPLACE).\n// Note: batching starts the next request after 500 ms, it does not wait for the previous job → put dependent queries in a separate run.\n// Currently (18.11.): the scoring view. Single source of truth for the 0–100 score (Telegram query and new-listing messages).\nconst q = s => ({ json: { query: s, useLegacySql: false, location: 'EU', timeoutMs: 60000 } });\nconst view = `\nCREATE OR REPLACE VIEW \\`stan-hunter.stan_hunter.listings_scored\\` AS\nWITH base AS (\n  SELECT *,\n    TRANSLATE(LOWER(CONCAT(IFNULL(opstina, ''), ' ', IFNULL(naselje, ''), ' ', IFNULL(naslov, ''))), 'čćšđž', 'ccsdz') AS mesto\n  FROM \\`stan-hunter.stan_hunter.listings\\`\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY id ORDER BY upisano DESC) = 1\n),\nwith_location AS (\n  SELECT *,\n    CASE\n      WHEN REGEXP_CONTAINS(mesto, r'mirijevo|mokri lug|kumodraz|medakovic|jajinci|ristin|kaludjerica|zarkovo') THEN 2\n      WHEN REGEXP_CONTAINS(mesto, r'vracar|dorcol|stari grad|savski venac|kalenic|crveni krst|krunski venac|centar|senjak|terazije|skupstina') THEN 5\n      WHEN REGEXP_CONTAINS(mesto, r'deram|cvetkova|lion|bulbuder|autokomanda|vozdovacka crkva|cubura|belvil|blok 2[1-689]|blok 30') THEN 4\n      WHEN REGEXP_CONTAINS(mesto, r'konjarnik|banjica|brace jerkovic|bezanijska kosa|vojvode vlahovica|ustanick') THEN 3\n      ELSE 3\n    END AS lok\n  FROM base\n)\nSELECT * EXCEPT (mesto),\n  ROUND(SAFE_DIVIDE(cena, m2), 2) AS cena_po_m2,\n  -- Score 0-100. Each part is normalised to 0-1 first. Unknown values get a neutral default.\n  -- location 30%, photo quality 30% (18.11.: equal to location), price 15% (600 EUR = 0, 300 EUR or less = 1), price/m2 10%, size 10%, furnished 5%\n  ROUND(100 * (\n      0.30 * (lok - 1) / 4\n    + 0.15 * IFNULL(GREATEST(0, LEAST(1, (600 - cena) / 300)), 0)\n    + 0.10 * IFNULL(GREATEST(0, LEAST(1, (15 - SAFE_DIVIDE(cena, m2)) / 10)), 0)\n    + 0.10 * (0.7 * IFNULL(GREATEST(0, LEAST(1, (m2 - 30) / 50)), 0.5) + 0.3 * IFNULL(GREATEST(0, LEAST(1, (sobe - 1) / 2)), 0.5))\n    + 0.05 * CASE namesten WHEN 'da' THEN 1 WHEN 'polunamešten' THEN 0.6 WHEN 'semi' THEN 0.6 WHEN 'ne' THEN 0 ELSE 0.4 END\n    + 0.30 * IFNULL(GREATEST(0, LEAST(1, (kvalitet - 1) / 4)), 0.5)\n  )) AS ocena\nFROM with_location`;\nreturn [q(view)];",
+        "language": "javaScript",
+        "mode": "runOnceForAllItems"
+      }
+    }
+  ],
+  "connections": {
+    "Manual Start": {
+      "main": [
+        [
+          {
+            "node": "Queries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queries": {
+      "main": [
+        [
+          {
+            "node": "RunBigQueryDdl",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "timezone": "Europe/Belgrade"
+  },
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  },
+  "nodeGroups": [],
+  "sourceWorkflowId": null,
+  "tags": [
+    "stan-hunter",
+    "utility"
+  ],
+  "versionMetadata": {
+    "name": "Restore scoring view definition (30/30)",
+    "description": "Updated nodes: Queries"
+  }
+}

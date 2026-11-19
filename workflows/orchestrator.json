@@ -1,0 +1,1252 @@
+{
+  "id": "vhabtSZ2LnUUEC3A",
+  "name": "Orchestrator",
+  "description": "Every 30 min 08:00–24:00 (paused at night): run each source (catch-up pagination after the pause) → merge → ids not in BigQuery → Claude enrichment → BigQuery load + Telegram. Source health: error or 0 listings twice in a row → alert.",
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "757eea42-c994-46e4-8a6b-dd076ae129cc",
+      "name": "Every30MinDaytime",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "expression": "2,32 8-23 * * *",
+              "field": "cronExpression"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "322145e5-12e2-42ac-879c-a57163da1e70",
+      "name": "Run4zida",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        224,
+        48
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "jwTYaykBV26hWQlG"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "8714e741-a151-487c-be09-af705b7f33ec",
+      "name": "MergeSources",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        448,
+        144
+      ],
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 3
+      }
+    },
+    {
+      "id": "40d8c36b-8b3e-4597-9a3e-cc1625a7a4ac",
+      "name": "RunCityExpert",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        224,
+        240
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "ly9pjYMinHLJnJvX"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "d9d4bdd9-db91-4ccd-9f7a-22ff3fa4dbd8",
+      "name": "Manual Run",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        288
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "63a20368-95a5-48db-a9d8-5192f3796204",
+      "name": "KeepValidListings",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.4,
+      "position": [
+        672,
+        144
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 4
+          },
+          "conditions": [
+            {
+              "id": "valid-id",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "1774bedc-a2a6-4a62-a3b9-af3a149edce4",
+      "name": "BuildLoadJob",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2016,
+        144
+      ],
+      "parameters": {
+        "jsCode": "// One bad value makes BigQuery reject the whole load job, so timestamps are checked here:\n// an unparseable upisano is replaced with now, an unparseable objavljeno becomes null.\nconst nowIso = new Date().toISOString();\nconst okTs = v => typeof v === 'string' && /^\\d{4}-\\d{2}-\\d{2}T/.test(v) && !isNaN(Date.parse(v));\nconst items = $input.all();\nconst ndjson = items.map(i => {\n  const j = { ...i.json };\n  if (!okTs(j.upisano)) j.upisano = nowIso;\n  if (j.objavljeno !== null && j.objavljeno !== undefined && !okTs(j.objavljeno)) j.objavljeno = null;\n  return JSON.stringify(j);\n}).join('\\n');\n\nconst metadata = {\n  configuration: {\n    load: {\n      destinationTable: {\n        projectId: 'stan-hunter',\n        datasetId: 'stan_hunter',\n        tableId: 'listings'\n      },\n      sourceFormat: 'NEWLINE_DELIMITED_JSON',\n      writeDisposition: 'WRITE_APPEND'\n    }\n  }\n};\n\nreturn [{ json: { metadata, ndjson, count: items.length } }];"
+      }
+    },
+    {
+      "id": "d03d6d52-b228-4a0b-b968-237cfea1ac06",
+      "name": "StartLoadJob",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2240,
+        144
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://bigquery.googleapis.com/upload/bigquery/v2/projects/stan-hunter/jobs?uploadType=resumable",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.metadata }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "googleApi": {
+          "name": "Google Service Account account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "id": "81474341-fa5e-4ed6-a7a4-d090a0d22384",
+      "name": "UploadNdjson",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2464,
+        144
+      ],
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $json.headers.location }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/octet-stream",
+        "body": "={{ $('BuildLoadJob').item.json.ndjson }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "googleApi": {
+          "name": "Google Service Account account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "id": "06e59fb7-eea7-4dcf-89bb-27b778100b9d",
+      "name": "FilterFlats",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.4,
+      "position": [
+        3584,
+        144
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 4
+          },
+          "conditions": [
+            {
+              "id": "passed",
+              "leftValue": "={{ $json.prosao_filter }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "7d6c3f87-56e6-4dfc-820e-374ee44d2ff8",
+      "name": "SendFlatsToTelegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        5152,
+        48
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendPhoto",
+        "chatId": "123456789",
+        "file": "={{ $json.slika }}",
+        "additionalFields": {
+          "caption": "={{ (() => { const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); const ocena = ($json.ocena ?? null) !== null ? `\\n⭐ <b>${$json.ocena}</b>/100` : ''; const troskovi = [$json.provizija ? `Provizija: ${esc($json.provizija)}` : null, ($json.rezije_eur ?? null) !== null ? `Režije ~${$json.rezije_eur} €` : null, $json.min_period_meseci ? `Min. ${$json.min_period_meseci} mes.` : null].filter(Boolean).join(' · '); const slike = ($json.kvalitet ?? null) !== null ? `\\n📸 Slike: ${$json.kvalitet}/5${$json.kvalitet_opis ? ' – ' + esc($json.kvalitet_opis) : ''}` : ''; const oglasivac = $json.oglasivac ? `\\n🏢 ${esc($json.oglasivac)}${$json.bez_provizije === 'da' ? ' · bez provizije' : ''}` : ''; return `🏠 <b>${$json.cena} €</b> · ${$json.m2} m² · ${$json.sobe ?? '?'} soba${ocena}\\n📍 ${esc($json.naselje)}, ${esc($json.opstina)}${($json.lok ?? null) !== null ? ` (lokacija ${$json.lok}/5)` : ''}\\n🛋 Namešten: ${$json.namesten}${slike}\\n🐾 Ljubimci: ${$json.kucni_ljubimci ?? 'nepoznato'} · 💶 Depozit: ${$json.depozit_eur ?? '?'} €${oglasivac}` + (troskovi ? `\\n💼 ${troskovi}` : '') + ($json.sumnjiv_oglas === true ? `\\n⚠️ Sumnjivo: ${esc($json.sumnjiv_razlog || 'proveri oglas')}` : '') + `\\n🌐 ${$json.izvor}\\n🔗 <a href=\"${$json.url}\">Otvori oglas</a>`; })() }}",
+          "parse_mode": "HTML",
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "35f81cac-e96e-49e4-90e4-bb92038a0535",
+      "disabled": false
+    },
+    {
+      "id": "60fef53e-ef3e-4547-a71b-4ead42638560",
+      "name": "RunNekretnine",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        224,
+        480
+      ],
+      "parameters": {
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        },
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "jefrXjfqueYB5NiV"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "1715ed39-050b-4069-b41e-797abb89eee7",
+      "name": "CheckSources",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        400
+      ],
+      "parameters": {
+        "jsCode": "// Source health. Run* nodes use continueRegularOutput, so a failing source does not fail the orchestrator\n// and does not trigger Error alerts. Errors or 0 listings per source are caught here instead.\n// Alert after 2 bad runs in a row (~1 h), reminder every 12 (~6 h), message when the source recovers.\nconst SOURCES = { Run4zida: '4zida', RunCityExpert: 'CityExpert', RunNekretnine: 'Nekretnine.rs' };\nconst ALERT_AFTER = 2;\nconst REMIND_EVERY = 12;\n// The Telegram node sends HTML, so <, > and & must be escaped.\nconst esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n\nconst store = $getWorkflowStaticData('global');\nconst health = { ...(store.sourceHealth || {}) };\nconst lines = [];\n\nfor (const [nodeName, label] of Object.entries(SOURCES)) {\n  let items;\n  try { items = $(nodeName).all(); } catch (e) { continue; } // node did not run in this execution\n  const errItem = items.find(i => i.json.error);\n  const count = items.filter(i => i.json.id).length;\n  let problem = null;\n  if (errItem) {\n    const e = errItem.json.error;\n    problem = 'greška: ' + esc(String(typeof e === 'string' ? e : (e?.message ?? JSON.stringify(e))).slice(0, 150));\n  } else if (count === 0) {\n    problem = '0 oglasa';\n  }\n  const prev = health[label] || { fails: 0, alerted: false };\n  if (problem) {\n    const fails = prev.fails + 1;\n    const alert = fails === ALERT_AFTER || (fails > ALERT_AFTER && (fails - ALERT_AFTER) % REMIND_EVERY === 0);\n    if (alert) lines.push(`❌ ${label}: ${problem} (${fails}× zaredom)`);\n    health[label] = { fails, alerted: prev.alerted || alert };\n  } else {\n    if (prev.alerted) lines.push(`✅ ${label} ponovo radi (${count} oglasa)`);\n    health[label] = { fails: 0, alerted: false };\n  }\n}\n\nstore.sourceHealth = health;\nif (!lines.length) return [];\nreturn [{ json: { text: `🩺 Stan Hunter izvori\\n${lines.join('\\n')}` } }];",
+        "language": "javaScript",
+        "mode": "runOnceForAllItems"
+      }
+    },
+    {
+      "id": "517de1b5-432d-4c0f-8c47-b1a68a1fe9ea",
+      "name": "SendSourceAlert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        896,
+        400
+      ],
+      "parameters": {
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        },
+        "chatId": "123456789",
+        "operation": "sendMessage",
+        "resource": "message",
+        "text": "={{ $json.text }}"
+      },
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "webhookId": "1b2546db-06e6-4b48-9893-2ae5d169aff0"
+    },
+    {
+      "id": "4cb593bf-8375-40a5-b20e-4701069ca834",
+      "name": "MarkSameFlat",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3808,
+        144
+      ],
+      "parameters": {
+        "jsCode": "// Same flat on several sites: fingerprint = price + m² + rooms + municipality (diacritics and the word \"opština\" removed).\n// Municipality, not neighbourhood: sites name the neighbourhood of the same flat differently (18.11.: 4zida \"Pravni fakultet - Vračar\" vs Nekretnine.rs \"Hram Svetog Save - Neimar - Čubura\").\n// A fingerprint collision is NOT dropped any more (two different flats can share it): route = 'check' sends the pair to Claude vision,\n// which compares the cover photos. Only a confirmed same flat becomes a one-line note; anything unclear gets the full message.\n// route: 'new' = full message | 'check' = compare with dup_of first | 'legacy' = collides with a fingerprint saved before 19.11. (no photo to compare) → one-line note.\n// Without size or location there is no fingerprint → full message. Fingerprints live 30 days in static data (production runs only).\nconst norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/\\bopstina\\b/g, '').replace(/\\s+/g, ' ').trim();\nconst DAY = 24 * 60 * 60 * 1000;\nconst now = Date.now();\nconst store = $getWorkflowStaticData('global');\nconst seen = {};\nfor (const [k, v] of Object.entries(store.sentFingerprints || {})) {\n  const t = typeof v === 'number' ? v : v?.t;\n  if (t && now - t < 30 * DAY) seen[k] = v;\n}\nconst out = [];\nfor (const item of $input.all()) {\n  const j = item.json;\n  const place = norm(j.opstina) || norm(j.naselje);\n  if (j.cena === null || j.cena === undefined || j.m2 === null || j.m2 === undefined || !place) {\n    out.push({ json: { ...j, route: 'new' } });\n    continue;\n  }\n  const base = `${j.cena}|${j.m2}|${j.sobe ?? '-'}`;\n  const fp = `${base}|o:${place}`;\n  const prev = seen[fp] ?? seen[`${base}|${norm(j.naselje)}`]; // second key: format before 18.11.\n  if (prev === undefined) {\n    seen[fp] = { t: now, id: j.id, url: j.url, izvor: j.izvor, slika: j.slika, cena: j.cena, m2: j.m2, sobe: j.sobe ?? null, opstina: j.opstina, naselje: j.naselje };\n    out.push({ json: { ...j, route: 'new' } });\n  } else if (typeof prev === 'number' || !prev.slika) {\n    out.push({ json: { ...j, route: 'legacy' } });\n  } else {\n    out.push({ json: { ...j, route: 'check', dup_of: prev } });\n  }\n}\nstore.sentFingerprints = seen;\nreturn out;",
+        "language": "javaScript",
+        "mode": "runOnceForAllItems"
+      }
+    },
+    {
+      "id": "e17ddbbc-fb06-40aa-8f9e-78ff0e9b15a8",
+      "name": "GetKnownIds",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        896,
+        144
+      ],
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "contentType": "json",
+        "jsonBody": "={{ { query: 'SELECT DISTINCT id FROM `stan-hunter.stan_hunter.listings` WHERE id IS NOT NULL', useLegacySql: false, location: 'EU', timeoutMs: 30000, maxResults: 20000 } }}",
+        "method": "POST",
+        "nodeCredentialType": "googleApi",
+        "options": {
+          "timeout": 60000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/stan-hunter/queries"
+      },
+      "credentials": {
+        "googleApi": {
+          "name": "Google Service Account account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "executeOnce": true
+    },
+    {
+      "id": "8e9e954b-8ceb-4ed7-81fb-d26a08c7b5fb",
+      "name": "OnlyNewFlats",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1008,
+        144
+      ],
+      "parameters": {
+        "jsCode": "// New = listings whose id is not in BigQuery yet.\n// Previously: Remove Duplicates (n8n memory) → a listing deleted from the table (❌ button, nightly Cleanup) never came back.\n// Now: if the site lists it again, it returns to the table. If the BigQuery query fails, the run fails (alert) and listings are picked up next run.\nconst r = $input.first().json;\nconst rows = r.rows || [];\nif (r.jobComplete === false || Number(r.totalRows ?? rows.length) > rows.length) {\n  throw new Error(`GetKnownIds: nepotpun odgovor BigQuery-ja (${rows.length} od ${r.totalRows})`);\n}\nconst known = new Set(rows.map(row => row.f[0].v));\nconst seen = new Set();\nreturn $('KeepValidListings').all().filter(i => {\n  const id = i.json.id;\n  if (known.has(id) || seen.has(id)) return false;\n  seen.add(id);\n  return true;\n});",
+        "language": "javaScript",
+        "mode": "runOnceForAllItems"
+      }
+    },
+    {
+      "id": "8ff9e3b3-b19e-41fb-9af5-4aef20a58fdf",
+      "name": "EnrichNew",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        1120,
+        144
+      ],
+      "parameters": {
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        },
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "f78u3VESIFSb2eG8"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "59ca18bb-5b97-47ca-8445-912345e7a11a",
+      "name": "ApplyEnrichment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1792,
+        144
+      ],
+      "parameters": {
+        "jsCode": "// Layer B: `Enrich - listing description (Claude)` returns { id, fields } for 4zida listings whose description was read.\n// Photos: `Enrich - photo quality (Claude vision)` returns { id, kvalitet, kvalitet_opis } for listings with a cover photo.\n// Both are merged into the original new listings. If enrichment fails or returns nothing, listings continue unchanged.\n// Structured fields from the site (layer A) win; the LLM only fills what is unknown.\nconst orig = $('OnlyNewFlats').all();\nconst extra = {};\nfor (const i of $('EnrichNew').all()) if (i.json && i.json.id && i.json.enrich_ok === true) extra[i.json.id] = i.json;\nconst photos = {};\nfor (const i of $input.all()) if (i.json && i.json.id && i.json.photo_ok === true) photos[i.json.id] = i.json;\nreturn orig.map(i => {\n  const j = { ...i.json };\n  const ph = photos[j.id];\n  if (ph) { j.kvalitet = ph.kvalitet ?? null; j.kvalitet_opis = ph.kvalitet_opis ?? null; }\n  const e = extra[j.id];\n  if (!e) return { json: j };\n  const unknown = v => v === null || v === undefined || v === '' || v === 'nepoznato';\n  j.provizija = e.provizija ?? j.provizija ?? null;\n  j.rezije_eur = e.rezije_eur ?? j.rezije_eur ?? null;\n  j.min_period_meseci = e.min_period_meseci ?? j.min_period_meseci ?? null;\n  j.sumnjiv_oglas = e.sumnjiv_oglas === true;\n  j.sumnjiv_razlog = e.sumnjiv_razlog ?? null;\n  if (unknown(j.depozit_eur) && e.depozit_eur !== null && e.depozit_eur !== undefined) j.depozit_eur = e.depozit_eur;\n  if (unknown(j.namesten) && !unknown(e.namesten)) j.namesten = e.namesten;\n  if (unknown(j.kucni_ljubimci) && !unknown(e.kucni_ljubimci)) j.kucni_ljubimci = e.kucni_ljubimci;\n  if (j.namesten === 'ne') j.prosao_filter = false; // filter: unfurnished does not pass\n  return { json: j };\n});",
+        "language": "javaScript",
+        "mode": "runOnceForAllItems"
+      }
+    },
+    {
+      "id": "fc69a395-b047-413a-9e23-947fd79a2a0c",
+      "name": "BackToListings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        144
+      ],
+      "parameters": {
+        "jsCode": "// RatePhotos needs the listings again (EnrichNew outputs only id + extracted fields).\nreturn $('OnlyNewFlats').all();",
+        "language": "javaScript",
+        "mode": "runOnceForAllItems"
+      }
+    },
+    {
+      "id": "411cfd2c-15ac-480a-852e-ffaeffc75b5a",
+      "name": "RatePhotos",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        1568,
+        144
+      ],
+      "parameters": {
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        },
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "Bf5AqMSpJqScMgxu"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "54695eb9-f76b-4b48-a64b-004d6b9dd031",
+      "name": "WaitForLoad",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2688,
+        144
+      ],
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "method": "GET",
+        "nodeCredentialType": "googleApi",
+        "options": {
+          "pagination": {
+            "pagination": {
+              "completeExpression": "={{ $response.body.status?.state === 'DONE' }}",
+              "limitPagesFetched": true,
+              "maxRequests": 10,
+              "paginationCompleteWhen": "other",
+              "paginationMode": "updateAParameterInEachRequest",
+              "parameters": {
+                "parameters": [
+                  {
+                    "name": "poll",
+                    "type": "qs",
+                    "value": "={{ $pageCount }}"
+                  }
+                ]
+              },
+              "requestInterval": 2000
+            }
+          },
+          "timeout": 20000
+        },
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "location",
+              "value": "EU"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "specifyQuery": "keypair",
+        "url": "=https://bigquery.googleapis.com/bigquery/v2/projects/stan-hunter/jobs/{{ $json.jobReference.jobId }}"
+      },
+      "credentials": {
+        "googleApi": {
+          "name": "Google Service Account account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "b387bb9b-bc9a-4963-be6e-31637781d987",
+      "name": "CheckLoad",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2912,
+        144
+      ],
+      "parameters": {
+        "jsCode": "// Poll result of the BigQuery load job (WaitForLoad repeats GET until state = DONE, max ~20 s).\n// errorResult → fail the run (Error alerts); nothing was inserted, so the same listings are picked up next run.\n// Still RUNNING or the poll itself failed → continue; messages then go out without a score.\nconst last = $input.all().at(-1)?.json ?? {};\nconst state = last.status?.state ?? 'UNKNOWN';\nconst err = last.status?.errorResult;\nif (err) throw new Error(`BigQuery load job: ${String(err.message ?? err.reason ?? 'error').slice(0, 300)}`);\nconst ids = $('ApplyEnrichment').all().map(i => i.json.id).filter(Boolean);\nreturn [{ json: { load_state: state, ids } }];",
+        "language": "javaScript",
+        "mode": "runOnceForAllItems"
+      }
+    },
+    {
+      "id": "e5b5299f-dfcb-4e99-9f3a-b549f6deff81",
+      "name": "GetScores",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        3136,
+        144
+      ],
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "contentType": "json",
+        "jsonBody": "={{ { query: 'SELECT id, ocena, lok FROM `stan-hunter.stan_hunter.listings_scored` WHERE id IN UNNEST(@ids)', useLegacySql: false, location: 'EU', timeoutMs: 30000, parameterMode: 'NAMED', queryParameters: [{ name: 'ids', parameterType: { type: 'ARRAY', arrayType: { type: 'STRING' } }, parameterValue: { arrayValues: ($json.ids.length ? $json.ids : ['-']).map(v => ({ value: v })) } }] } }}",
+        "method": "POST",
+        "nodeCredentialType": "googleApi",
+        "options": {
+          "timeout": 45000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/stan-hunter/queries"
+      },
+      "credentials": {
+        "googleApi": {
+          "name": "Google Service Account account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "208718ab-7a48-419a-b740-459b60d224b8",
+      "name": "AttachScores",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3360,
+        144
+      ],
+      "parameters": {
+        "jsCode": "// The 0–100 score comes from the BigQuery view listings_scored (the same formula /top uses), so it is computed once.\n// Missing score (query failed, load still running) → the message is sent without it.\nconst r = $input.first().json;\nconst fields = (r.schema?.fields || []).map(f => f.name);\nconst scores = {};\nfor (const row of r.rows || []) {\n  const o = Object.fromEntries(row.f.map((c, i) => [fields[i], c.v]));\n  scores[o.id] = { ocena: o.ocena === null ? null : Math.round(Number(o.ocena)), lok: o.lok === null ? null : Number(o.lok) };\n}\nreturn $('ApplyEnrichment').all().map(i => ({ json: { ...i.json, ocena: scores[i.json.id]?.ocena ?? null, lok: scores[i.json.id]?.lok ?? null } }));",
+        "language": "javaScript",
+        "mode": "runOnceForAllItems"
+      }
+    },
+    {
+      "id": "69351aa1-4ea2-4381-9cea-5bf30939c4bf",
+      "name": "RouteDup",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        4032,
+        144
+      ],
+      "parameters": {
+        "options": {},
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r1",
+                    "leftValue": "={{ $json.route }}",
+                    "operator": {
+                      "operation": "equals",
+                      "type": "string"
+                    },
+                    "rightValue": "new"
+                  }
+                ],
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                }
+              },
+              "outputKey": "new",
+              "renameOutput": true
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r2",
+                    "leftValue": "={{ $json.route }}",
+                    "operator": {
+                      "operation": "equals",
+                      "type": "string"
+                    },
+                    "rightValue": "check"
+                  }
+                ],
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                }
+              },
+              "outputKey": "check",
+              "renameOutput": true
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r3",
+                    "leftValue": "={{ $json.route }}",
+                    "operator": {
+                      "operation": "equals",
+                      "type": "string"
+                    },
+                    "rightValue": "legacy"
+                  }
+                ],
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                }
+              },
+              "outputKey": "legacy",
+              "renameOutput": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "2b7e5961-4564-433b-a9b4-678736034abf",
+      "name": "BuildDupPair",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4256,
+        240
+      ],
+      "parameters": {
+        "jsCode": "// Input for `Dedup - same flat check (Claude vision)`: the new listing and the one already sent with the same fingerprint.\nconst { dup_of, route, ...novi } = $json;\nreturn { json: { novi, postojeci: dup_of } };",
+        "language": "javaScript",
+        "mode": "runOnceForEachItem"
+      }
+    },
+    {
+      "id": "040e5516-cd03-47ac-aac4-23a0cfd9ba4c",
+      "name": "CheckSameFlat",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        4480,
+        240
+      ],
+      "parameters": {
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        },
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "8bmS1hDZ2lXDudOf"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "7a3a79ad-e68b-4c95-bbd3-51552cdf8d0d",
+      "name": "ApplyDupResult",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4704,
+        240
+      ],
+      "parameters": {
+        "jsCode": "// Back to the listing + the verdict. isti === true → one-line note; false or null (could not compare, API error) → full message.\nconst pair = $('BuildDupPair').item.json;\nconst L = pair.novi;\nconst prev = pair.postojeci;\nconst isti = $json.isti === true;\nconst kada = prev.t ? DateTime.fromMillis(prev.t).setZone('Europe/Belgrade').toFormat('dd.MM. HH:mm') : '';\nreturn { json: { ...L, dup_isti: isti, dup_razlog: $json.razlog ?? null, dup_izvor: prev.izvor, dup_url: prev.url, dup_kada: kada } };",
+        "language": "javaScript",
+        "mode": "runOnceForEachItem"
+      }
+    },
+    {
+      "id": "b49d07da-f27e-496f-b588-033a157b5024",
+      "name": "IsSameFlat",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4928,
+        240
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "sf1",
+              "leftValue": "={{ $json.dup_isti }}",
+              "operator": {
+                "operation": "true",
+                "singleValue": true,
+                "type": "boolean"
+              },
+              "rightValue": ""
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "d18dd9b3-aadc-411f-9e9c-5189641012f9",
+      "name": "SendDupNote",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        5152,
+        336
+      ],
+      "parameters": {
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_notification": true,
+          "disable_web_page_preview": true,
+          "parse_mode": "HTML"
+        },
+        "chatId": "123456789",
+        "operation": "sendMessage",
+        "resource": "message",
+        "text": "={{ (() => { const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); const j = $json; const head = j.route === 'legacy' ? `↪ <b>Verovatno isti stan</b> kao jedan ranije poslat` : `↪ <b>Isti stan</b> kao <a href=\"${esc(j.dup_url)}\">${esc(j.dup_izvor)} oglas</a>${j.dup_kada ? ` (${j.dup_kada})` : ''}, sada i na ${esc(j.izvor)}`; return head + `\\n🏠 ${j.cena} € · ${j.m2} m² · ${j.sobe ?? '?'} soba${(j.ocena ?? null) !== null ? ` · ⭐ ${j.ocena}/100` : ''}\\n📍 ${esc(j.naselje)}, ${esc(j.opstina)}` + (j.dup_razlog ? `\\n🤖 ${esc(j.dup_razlog)}` : '') + `\\n🔗 <a href=\"${esc(j.url)}\">Otvori (${esc(j.izvor)})</a>`; })() }}"
+      },
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "ad2af185-b115-4942-81c4-423673baef91"
+    }
+  ],
+  "connections": {
+    "Run4zida": {
+      "main": [
+        [
+          {
+            "node": "MergeSources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MergeSources": {
+      "main": [
+        [
+          {
+            "node": "KeepValidListings",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "CheckSources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RunCityExpert": {
+      "main": [
+        [
+          {
+            "node": "MergeSources",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Manual Run": {
+      "main": [
+        [
+          {
+            "node": "Run4zida",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RunCityExpert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RunNekretnine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BuildLoadJob": {
+      "main": [
+        [
+          {
+            "node": "StartLoadJob",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "StartLoadJob": {
+      "main": [
+        [
+          {
+            "node": "UploadNdjson",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RunNekretnine": {
+      "main": [
+        [
+          {
+            "node": "MergeSources",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "CheckSources": {
+      "main": [
+        [
+          {
+            "node": "SendSourceAlert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FilterFlats": {
+      "main": [
+        [
+          {
+            "node": "MarkSameFlat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "KeepValidListings": {
+      "main": [
+        [
+          {
+            "node": "GetKnownIds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GetKnownIds": {
+      "main": [
+        [
+          {
+            "node": "OnlyNewFlats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OnlyNewFlats": {
+      "main": [
+        [
+          {
+            "node": "EnrichNew",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ApplyEnrichment": {
+      "main": [
+        [
+          {
+            "node": "BuildLoadJob",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every30MinDaytime": {
+      "main": [
+        [
+          {
+            "node": "Run4zida",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RunCityExpert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RunNekretnine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "EnrichNew": {
+      "main": [
+        [
+          {
+            "node": "BackToListings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BackToListings": {
+      "main": [
+        [
+          {
+            "node": "RatePhotos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RatePhotos": {
+      "main": [
+        [
+          {
+            "node": "ApplyEnrichment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "UploadNdjson": {
+      "main": [
+        [
+          {
+            "node": "WaitForLoad",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WaitForLoad": {
+      "main": [
+        [
+          {
+            "node": "CheckLoad",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CheckLoad": {
+      "main": [
+        [
+          {
+            "node": "GetScores",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GetScores": {
+      "main": [
+        [
+          {
+            "node": "AttachScores",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AttachScores": {
+      "main": [
+        [
+          {
+            "node": "FilterFlats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MarkSameFlat": {
+      "main": [
+        [
+          {
+            "node": "RouteDup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RouteDup": {
+      "main": [
+        [
+          {
+            "node": "SendFlatsToTelegram",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "BuildDupPair",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SendDupNote",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BuildDupPair": {
+      "main": [
+        [
+          {
+            "node": "CheckSameFlat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CheckSameFlat": {
+      "main": [
+        [
+          {
+            "node": "ApplyDupResult",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ApplyDupResult": {
+      "main": [
+        [
+          {
+            "node": "IsSameFlat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IsSameFlat": {
+      "main": [
+        [
+          {
+            "node": "SendDupNote",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SendFlatsToTelegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "timezone": "Europe/Belgrade",
+    "saveManualExecutions": true,
+    "errorWorkflow": "UTOIDEVnd1km2Fjp"
+  },
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  },
+  "nodeGroups": [
+    {
+      "id": "559159a3-0095-4c87-a869-0670a3e917ac",
+      "name": "New listings",
+      "nodeIds": [
+        "e17ddbbc-fb06-40aa-8f9e-78ff0e9b15a8",
+        "8e9e954b-8ceb-4ed7-81fb-d26a08c7b5fb"
+      ],
+      "description": "New = id not in BigQuery yet; a deleted listing comes back if the site lists it again"
+    },
+    {
+      "id": "f0ece7d5-0ed5-47fc-8250-ff9010a8735f",
+      "name": "Claude enrichment",
+      "nodeIds": [
+        "8ff9e3b3-b19e-41fb-9af5-4aef20a58fdf",
+        "fc69a395-b047-413a-9e23-947fd79a2a0c",
+        "411cfd2c-15ac-480a-852e-ffaeffc75b5a",
+        "59ca18bb-5b97-47ca-8445-912345e7a11a"
+      ],
+      "description": "Description (4zida) + cover photo (all sources) → fee, utilities, scam flag, photo quality; a failure does not stop ingest"
+    },
+    {
+      "id": "690d5d4c-53a4-463c-b5d6-50a2b600eed5",
+      "name": "BigQuery load",
+      "nodeIds": [
+        "1774bedc-a2a6-4a62-a3b9-af3a149edce4",
+        "d03d6d52-b228-4a0b-b968-237cfea1ac06",
+        "81474341-fa5e-4ed6-a7a4-d090a0d22384",
+        "54695eb9-f76b-4b48-a64b-004d6b9dd031",
+        "b387bb9b-bc9a-4963-be6e-31637781d987"
+      ],
+      "description": "Batch load job (resumable upload, NDJSON), then poll the job until DONE; a load error fails the run"
+    },
+    {
+      "id": "aebfa514-844c-49ae-a705-f100285e9f10",
+      "name": "Score",
+      "nodeIds": [
+        "e5b5299f-dfcb-4e99-9f3a-b549f6deff81",
+        "208718ab-7a48-419a-b740-459b60d224b8"
+      ],
+      "description": "0–100 score from the listings_scored view (same formula as /top)"
+    },
+    {
+      "id": "70601bc5-eb62-4d4c-898f-4477f8e494aa",
+      "name": "Telegram",
+      "nodeIds": [
+        "06e59fb7-eea7-4dcf-89bb-27b778100b9d",
+        "4cb593bf-8375-40a5-b20e-4701069ca834",
+        "69351aa1-4ea2-4381-9cea-5bf30939c4bf",
+        "2b7e5961-4564-433b-a9b4-678736034abf",
+        "040e5516-cd03-47ac-aac4-23a0cfd9ba4c",
+        "7a3a79ad-e68b-4c95-bbd3-51552cdf8d0d",
+        "b49d07da-f27e-496f-b588-033a157b5024",
+        "7d6c3f87-56e6-4dfc-820e-374ee44d2ff8",
+        "d18dd9b3-aadc-411f-9e9c-5189641012f9"
+      ],
+      "description": "Filter; same fingerprint as a flat already sent → Claude vision compares photos: same flat = one-line note, else full message"
+    },
+    {
+      "id": "ef94e4cd-75a9-44ea-9ab9-e8e568e177ff",
+      "name": "Source health",
+      "nodeIds": [
+        "1715ed39-050b-4069-b41e-797abb89eee7",
+        "517de1b5-432d-4c0f-8c47-b1a68a1fe9ea"
+      ],
+      "description": "Error or 0 listings twice in a row → Telegram; reminder every ~6 h; message on recovery"
+    }
+  ],
+  "sourceWorkflowId": null,
+  "tags": [
+    "orchestrator",
+    "stan-hunter"
+  ],
+  "versionMetadata": {
+    "name": "RouteDup: no fallback output",
+    "description": "Updated nodes: RouteDup"
+  }
+}

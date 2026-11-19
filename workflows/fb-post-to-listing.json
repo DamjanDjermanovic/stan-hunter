@@ -1,0 +1,476 @@
+{
+  "id": "ciV3G8I8EjyILsc3",
+  "name": "FB post to listing",
+  "description": "FB post text or screenshot → Claude extraction (JSON; vision for images, incl. photo quality) → normalised listing → is the same flat already in BigQuery? (Claude vision compare).",
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "18b29ba4-5ef2-4e2b-99b4-7cf4ecb6ecb0",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "497ba80f-cca8-4027-bd84-04a0da324a27",
+      "name": "PostInput",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        224,
+        96
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "p-text",
+              "name": "text",
+              "type": "string",
+              "value": "={{ $json.text ?? \"Izdajem dvosoban namešten stan na Zvezdari kod Vukovog spomenika, 52 m2, III sprat, ima lift. Cena 480e + infostan (oko 90e zimi). Depozit jedna kirija. Kućni ljubimci nisu dozvoljeni. Useljenje od 1.12, minimalno 12 meseci. Agencijska provizija 50% prve kirije. Ozbiljni neka pišu u inbox.\" }}"
+            },
+            {
+              "id": "p-url",
+              "name": "url",
+              "type": "string",
+              "value": "={{ $json.url ?? \"\" }}"
+            },
+            {
+              "id": "p-grupa",
+              "name": "grupa",
+              "type": "string",
+              "value": "={{ $json.grupa ?? \"fb\" }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "22edb6c2-70dc-4214-a4a5-7b89075c39c6",
+      "name": "Manual Test",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        192
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "67fb9d5c-84b2-4d0c-af38-bc9c98f9410a",
+      "name": "ExtractWithClaude",
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        448,
+        96
+      ],
+      "parameters": {
+        "resource": "text",
+        "operation": "message",
+        "modelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "claude-haiku-5-5"
+        },
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "={{ $json.text }}"
+            }
+          ]
+        },
+        "simplify": true,
+        "options": {
+          "includeMergedResponse": true,
+          "maxTokens": 4000,
+          "system": "Ti si parser oglasa za izdavanje stanova u Beogradu. Dobijaš tekst objave iz Facebook grupe (srpski, ćirilica ili latinica, često sa greškama i skraćenicama). Vrati ISKLJUČIVO jedan JSON objekat, bez objašnjenja i bez markdown ograda, sa tačno ovim poljima: jeste_ponuda (boolean: true samo ako neko IZDAJE stan; false ako neko traži stan, ako je prodaja, reklama ili nešto drugo), naslov (kratak opis, npr. \"Dvosoban stan, Zvezdara\"), cena (broj u evrima za mesec dana ili null), m2 (broj ili null), sobe (broj, npr. 1.5, 2, 2.5, ili null), opstina (string ili null), naselje (string ili null), namesten (jedna od vrednosti: \"da\", \"polunamešten\", \"ne\", \"nepoznato\"), depozit_eur (broj ili null; ako piše \"jedna kirija\" upiši iznos kirije), kucni_ljubimci (jedna od vrednosti: \"da\", \"ne\", \"nepoznato\"), provizija (kratak tekst, npr. \"50% prve kirije\", ili null), rezije_eur (procena mesečnih režija u evrima ako je navedeno, inače null), min_period_meseci (broj ili null), sumnjiv_oglas (boolean), sumnjiv_razlog (kratko objašnjenje na srpskom ili null). Pravila: ne izmišljaj podatke, ako nečega nema u tekstu stavi null ili \"nepoznato\". Cene u RSD ili dinarima prevedi u evre po kursu 117. Stanovi u Beogradu se izdaju u evrima: ako je cena napisana sa $, USD ili US$ (Facebook Marketplace prikazuje valutu naloga), upiši ISTI broj kao evre i NE preračunavaj kurs (\"$500/month\" = 500). Ako tekst objave navodi cenu u evrima, ona ima prednost. Sumnjiv je oglas ako: neko traži avans ili uplatu pre razgledanja, cena je nerealno niska za lokaciju i veličinu, vlasnik se ne može videti uživo, pritisak da se odluči odmah, ili se agencija predstavlja kao vlasnik. Ne upisuj brojeve telefona ni lične podatke u izlaz."
+        }
+      },
+      "credentials": {
+        "anthropicApi": {
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "id": "e2131d8b-642f-4105-aacc-33e463ee9ebd",
+      "name": "NormalizeFbListing",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        96
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Two inputs: FB post text (ExtractWithClaude) or a screenshot of the post (ReadScreenshot, Claude vision).\nconst fromImage = $('ReadScreenshot').isExecuted;\nconst src = fromImage ? $('IsScreenshot').item.json : $('PostInput').item.json;\n// The output shape differs per Anthropic node operation → look for the text in all known fields.\nconst blocks = Array.isArray($json.content) ? $json.content : [];\nconst fromBlocks = blocks.filter(c => c.type === 'text').map(c => c.text).join('');\nconst raw = String($json.merged_response || fromBlocks || $json.text || $json.output || $json.message?.content || '');\nconst a = raw.indexOf('{');\nconst b = raw.lastIndexOf('}');\nlet p = null;\ntry { p = JSON.parse(raw.slice(a, b + 1)); } catch (e) { p = null; }\nif (!p) {\n  return { json: { id: '', parse_error: true, raw_odgovor: raw.slice(0, 300) } };\n}\nconst cena = (p.cena === null || p.cena === undefined) ? null : Number(p.cena);\nconst m2 = (p.m2 === null || p.m2 === undefined) ? null : Number(p.m2);\nconst sobe = (p.sobe === null || p.sobe === undefined) ? null : Number(p.sobe);\nconst namesten = p.namesten || 'nepoznato';\n// id: for text, a hash of the text; for a screenshot, a hash of the extracted fields (same listing sent twice → same id → dedup).\nconst key = fromImage ? ['img', cena, m2, sobe, p.opstina, p.naselje, p.naslov].join('|').toLowerCase() : String(src.text);\nlet h = 5381;\nfor (let i = 0; i < key.length; i++) { h = ((h * 33) ^ key.charCodeAt(i)) >>> 0; }\n// Photo quality from the screenshot (same 1–5 scale as `Enrich - photo quality`): kvalitet = mean of condition and furnishing.\nconst score15 = v => { const n = Number(v); return v === null || v === undefined || v === '' || !Number.isFinite(n) ? null : Math.min(5, Math.max(1, n)); };\nconst photoParts = fromImage ? [score15(p.stanje_slike), score15(p.opremljenost_slike)].filter(x => x !== null) : [];\nconst kvalitet = photoParts.length ? Math.round(photoParts.reduce((x, y) => x + y, 0) / photoParts.length * 10) / 10 : null;\nconst CYR = { 'а':'a','б':'b','в':'v','г':'g','д':'d','ђ':'đ','е':'e','ж':'ž','з':'z','и':'i','ј':'j','к':'k','л':'l','љ':'lj','м':'m','н':'n','њ':'nj','о':'o','п':'p','р':'r','с':'s','т':'t','ћ':'ć','у':'u','ф':'f','х':'h','ц':'c','ч':'č','џ':'dž','ш':'š' };\nconst lat = t => t.replace(/[Ѐ-ӿ]/g, ch => { const low = ch.toLowerCase(); const r = CYR[low] ?? ''; return ch === low ? r : r.charAt(0).toUpperCase() + r.slice(1); });\nconst kvalitetOpis = kvalitet !== null && typeof p.slike_opis === 'string' && p.slike_opis.trim() ? lat(p.slike_opis.trim()).slice(0, 80) : null;\nconst grupa = src.grupa && src.grupa !== 'fb' ? 'fb:' + src.grupa : 'fb';\nconst prosao = p.jeste_ponuda === true && (cena === null || cena <= 600) && (m2 === null || m2 >= 30) && (sobe === null || sobe >= 1.5) && namesten !== 'ne';\nreturn { json: {\n  id: (fromImage ? 'fb_img_' : 'fb_') + h.toString(16),\n  izvor: grupa + (fromImage ? ':screenshot' : ''),\n  url: src.url || '',\n  naslov: p.naslov || 'FB oglas',\n  cena: cena,\n  m2: m2,\n  sobe: sobe,\n  opstina: p.opstina || '',\n  naselje: p.naselje || '',\n  namesten: namesten,\n  placanje: 'month',\n  objavljeno: null,\n  slika: '',\n  upisano: new Date().toISOString(),\n  prosao_filter: prosao,\n  jeste_ponuda: p.jeste_ponuda === true,\n  depozit_eur: p.depozit_eur ?? null,\n  kucni_ljubimci: p.kucni_ljubimci || 'nepoznato',\n  provizija: p.provizija ?? null,\n  rezije_eur: p.rezije_eur ?? null,\n  min_period_meseci: p.min_period_meseci ?? null,\n  sumnjiv_oglas: p.sumnjiv_oglas === true,\n  sumnjiv_razlog: p.sumnjiv_razlog ?? null,\n  kvalitet,\n  kvalitet_opis: kvalitetOpis\n} };"
+      }
+    },
+    {
+      "id": "ee1ebdbd-c5dc-4fd4-9c32-94dc23c06447",
+      "name": "IsScreenshot",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        224,
+        -96
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "img",
+              "leftValue": "={{ $json.image === true && !!$binary?.data }}",
+              "operator": {
+                "operation": "true",
+                "singleValue": true,
+                "type": "boolean"
+              },
+              "rightValue": ""
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "118b1181-6597-4f67-b235-96b0aeae120a",
+      "name": "ReadScreenshot",
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        448,
+        -96
+      ],
+      "parameters": {
+        "binaryPropertyName": "data",
+        "inputType": "binary",
+        "modelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "claude-haiku-5-5"
+        },
+        "operation": "analyze",
+        "options": {
+          "maxTokens": 4000
+        },
+        "resource": "image",
+        "simplify": true,
+        "text": "={{ 'Na slici je screenshot objave iz Facebook grupe za izdavanje stanova u Beogradu (telefon ili računar). Pročitaj tekst objave sa slike i izvuci podatke o stanu. Ime, slika profila i komentari drugih ljudi nisu deo oglasa: ignoriši ih. Ako je tekst presečen (\"... more\", \"Prikaži više\"), koristi samo vidljivi deo i ne izmišljaj ostatak; fotografije stana smeju da pokažu samo da li je namešten. Vrati ISKLJUČIVO jedan JSON objekat, bez objašnjenja i bez markdown ograda, sa tačno ovim poljima: jeste_ponuda (boolean: true samo ako neko IZDAJE stan; false ako neko traži stan, ako je prodaja, reklama ili nešto drugo), naslov (kratak opis, npr. \"Dvosoban stan, Zvezdara\"), cena (broj u evrima za mesec dana ili null), m2 (broj ili null; \"kv\" i \"kvm\" znače m²), sobe (broj, npr. 1.5, 2, 2.5, ili null), opstina (string ili null; ako je navedena samo ulica a znaš sigurno opštinu, upiši je, inače null), naselje (string ili null), namesten (\"da\", \"polunamešten\", \"ne\" ili \"nepoznato\"), depozit_eur (broj ili null; \"jedna kirija\" = iznos cene), kucni_ljubimci (\"da\", \"ne\" ili \"nepoznato\"), provizija (kratak tekst ili null), rezije_eur (procena mesečnih režija u evrima ako je navedeno, inače null), min_period_meseci (broj ili null), sumnjiv_oglas (boolean), sumnjiv_razlog (kratko objašnjenje na srpskom ili null), stanje_slike (1–5 ili null: stanje stana na fotografijama u objavi; 1 = staro i dotrajalo, zastareo nameštaj, stari podovi; 3 = održavano ali ne novo; 5 = novo ili sveže renovirano), opremljenost_slike (1–5 ili null: 1 = prazno ili samo osnovno, 3 = uobičajeno opremljeno, 5 = kompletno i moderno), slike_opis (najviše 8 reči o stanju sa fotografija, srpski, latinica, ekavica, ili null). Ako u objavi nema fotografija unutrašnjosti stana, stanje_slike, opremljenost_slike i slike_opis su null. Cene u RSD/dinarima prevedi u evre po kursu 117. Stanovi u Beogradu se izdaju u evrima: cena sa $, USD ili US$ (Facebook Marketplace prikazuje valutu naloga, npr. \"$500/month\") je ISTI broj u evrima (500), NE preračunavaj kurs. Ako tekst objave navodi cenu u evrima, ona ima prednost. Sumnjiv je oglas ako: neko traži avans ili uplatu pre razgledanja, cena je nerealno niska za lokaciju i veličinu, vlasnik se ne može videti uživo, pritisak da se odluči odmah, ili se agencija predstavlja kao vlasnik. Ne upisuj brojeve telefona, imena ni lične podatke u izlaz.' + ($json.text ? '\\n\\nKorisnik je uz sliku napisao: ' + $json.text : '') }}"
+      },
+      "credentials": {
+        "anthropicApi": {
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "id": "d681b85e-cf17-4503-bd77-a62147ac9a99",
+      "name": "FindSameFlat",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        896,
+        96
+      ],
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "contentType": "json",
+        "jsonBody": "={{ (() => { const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/\\bopstina\\b/g, '').replace(/\\s+/g, ' ').trim(); const P = (name, type, value) => ({ name, parameterType: { type }, parameterValue: { value: String(value) } }); return { query: \"SELECT id, izvor, url, slika, cena, m2, sobe, opstina, naselje, ocena, lok, kvalitet, kvalitet_opis FROM `stan-hunter.stan_hunter.listings_scored` WHERE cena = @cena AND m2 = @m2 AND (@sobe < 0 OR sobe IS NULL OR sobe = @sobe) AND (@opstina = '' OR TRIM(REGEXP_REPLACE(TRANSLATE(LOWER(IFNULL(opstina, '')), 'čćšđž', 'ccsdz'), r'\\\\bopstina\\\\b', '')) = @opstina) AND NOT STARTS_WITH(id, 'fb') AND upisano > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY) ORDER BY IFNULL(slika, '') = '', upisano DESC LIMIT 1\", useLegacySql: false, location: 'EU', timeoutMs: 20000, parameterMode: 'NAMED', queryParameters: [P('cena', 'INT64', Math.round(Number($json.cena ?? -1))), P('m2', 'FLOAT64', Number($json.m2 ?? -1)), P('sobe', 'FLOAT64', Number($json.sobe ?? -1)), P('opstina', 'STRING', norm($json.opstina))] }; })() }}",
+        "method": "POST",
+        "nodeCredentialType": "googleApi",
+        "options": {
+          "timeout": 30000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/stan-hunter/queries"
+      },
+      "credentials": {
+        "googleApi": {
+          "name": "Google Service Account account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "1220a663-a218-4bd8-910a-d6eb68ef84c6",
+      "name": "PickCandidate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        96
+      ],
+      "parameters": {
+        "jsCode": "// Is this flat already in the database from a listing site? Candidate = same price + m² + rooms + municipality in the last 30 days (FindSameFlat).\n// A screenshot is sent along so Claude can compare the photos in the post with the candidate's cover photo.\nconst L = $('NormalizeFbListing').item.json;\nconst r = $json;\nconst fields = (r.schema?.fields || []).map(f => f.name);\nconst rows = (r.rows || []).map(row => Object.fromEntries(row.f.map((c, i) => [fields[i], c.v])));\nconst cand = rows[0];\nif (!L.id || !cand) return { json: { listing: L, has_candidate: false } };\nconst num = v => v === null || v === undefined ? null : Number(v);\nconst postojeci = { ...cand, cena: num(cand.cena), m2: num(cand.m2), sobe: num(cand.sobe), ocena: num(cand.ocena), lok: num(cand.lok), kvalitet: num(cand.kvalitet) };\nconst fromImage = $('ReadScreenshot').isExecuted;\nconst bin = fromImage ? $('IsScreenshot').item.binary?.data : null;\nreturn { json: { novi: L, postojeci, has_candidate: true }, ...(bin ? { binary: { data: bin } } : {}) };",
+        "language": "javaScript",
+        "mode": "runOnceForEachItem"
+      }
+    },
+    {
+      "id": "61afd053-8d0e-49e5-a25d-9bfa616e1661",
+      "name": "HasCandidate",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1344,
+        96
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "hc1",
+              "leftValue": "={{ $json.has_candidate }}",
+              "operator": {
+                "operation": "true",
+                "singleValue": true,
+                "type": "boolean"
+              },
+              "rightValue": ""
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "6e449ac7-c2d9-4577-b726-1111b6fb2cf4",
+      "name": "CheckSameFlat",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        1568,
+        0
+      ],
+      "parameters": {
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        },
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "8bmS1hDZ2lXDudOf"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "a01162ce-c6f3-4b83-9105-7977cb913689",
+      "name": "ApplySameFlat",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1792,
+        96
+      ],
+      "parameters": {
+        "jsCode": "// Result of the same-flat check merged into the listing as flat dup_* fields (BigQuery load ignores unknown fields).\n// dup_isti: true = Claude confirmed the same flat, false = different flat, null = could not compare (e.g. text post without photos).\nconst pick = $('PickCandidate').item.json;\nconst L = pick.novi ?? pick.listing ?? {};\nif (!pick.has_candidate) return { json: L };\nconst c = pick.postojeci;\nconst isti = typeof $json.isti === 'boolean' ? $json.isti : null;\nreturn { json: { ...L, dup_isti: isti, dup_razlog: $json.razlog ?? null, dup_id: c.id, dup_url: c.url, dup_izvor: c.izvor, dup_ocena: c.ocena, dup_lok: c.lok, dup_kvalitet: c.kvalitet, dup_kvalitet_opis: c.kvalitet_opis ?? null } };",
+        "language": "javaScript",
+        "mode": "runOnceForEachItem"
+      }
+    }
+  ],
+  "connections": {
+    "PostInput": {
+      "main": [
+        [
+          {
+            "node": "ExtractWithClaude",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Test": {
+      "main": [
+        [
+          {
+            "node": "PostInput",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ExtractWithClaude": {
+      "main": [
+        [
+          {
+            "node": "NormalizeFbListing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "IsScreenshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IsScreenshot": {
+      "main": [
+        [
+          {
+            "node": "ReadScreenshot",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "PostInput",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ReadScreenshot": {
+      "main": [
+        [
+          {
+            "node": "NormalizeFbListing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NormalizeFbListing": {
+      "main": [
+        [
+          {
+            "node": "FindSameFlat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FindSameFlat": {
+      "main": [
+        [
+          {
+            "node": "PickCandidate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PickCandidate": {
+      "main": [
+        [
+          {
+            "node": "HasCandidate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HasCandidate": {
+      "main": [
+        [
+          {
+            "node": "CheckSameFlat",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "ApplySameFlat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CheckSameFlat": {
+      "main": [
+        [
+          {
+            "node": "ApplySameFlat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "errorWorkflow": "UTOIDEVnd1km2Fjp"
+  },
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  },
+  "nodeGroups": [
+    {
+      "id": "634f4078-a705-4cd7-a2c1-5040e71f1f43",
+      "name": "Already in the database? (Claude vision)",
+      "nodeIds": [
+        "d681b85e-cf17-4503-bd77-a62147ac9a99",
+        "1220a663-a218-4bd8-910a-d6eb68ef84c6",
+        "61afd053-8d0e-49e5-a25d-9bfa616e1661",
+        "6e449ac7-c2d9-4577-b726-1111b6fb2cf4",
+        "a01162ce-c6f3-4b83-9105-7977cb913689"
+      ],
+      "description": "Same price + m2 + rooms + municipality in BigQuery (30 days) → Claude compares the screenshot with that listing's cover photo"
+    }
+  ],
+  "sourceWorkflowId": null,
+  "tags": [
+    "intake",
+    "llm",
+    "stan-hunter"
+  ],
+  "versionMetadata": {
+    "name": "Credential + group for same-flat check",
+    "description": "Updated workflow"
+  }
+}

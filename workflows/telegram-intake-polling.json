@@ -1,0 +1,1781 @@
+{
+  "id": "xj5kX1jyliG4HqS9",
+  "name": "Telegram intake (polling)",
+  "description": "Every 2 min getUpdates → commands/questions → Telegram query (Claude + BigQuery); post text or screenshot → FB post to listing (Claude) → BigQuery + reply; ❌ deletes. Telegram 5xx/429/network skipped, other errors alert.",
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "d7a0a375-d7b5-42ea-9af6-2fd08e84818f",
+      "name": "Every2Min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 2
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d36d0dff-e69f-40f1-92a4-41eb462c99e1",
+      "name": "GetBotState",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        224,
+        0
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "SpQhEI3UDwSVrhGw"
+        },
+        "matchType": "anyCondition",
+        "filters": {
+          "conditions": []
+        },
+        "returnAll": true
+      }
+    },
+    {
+      "id": "a4334364-0479-4e81-a8dc-651eecbab5f1",
+      "name": "PrepareRequest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const rows = $input.all().map(i => i.json);\nconst get = n => (rows.find(r => r.name === n) || {}).value;\nconst token = String(get('telegram_bot_token') || '').trim();\nconst offset = Number(get('telegram_offset') || 0);\n// Without a token the workflow cannot work, so this must raise an alert instead of passing silently.\nif (!token) {\n  throw new Error('Nema telegram_bot_token u data table stan_hunter_kv');\n}\nreturn [{ json: { token: token, offset: offset } }];"
+      }
+    },
+    {
+      "id": "cfd58850-b0a8-4de2-aa9f-45b1a4c2e38d",
+      "name": "GetUpdates",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        672,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.telegram.org/bot{{ $json.token }}/getUpdates",
+        "sendQuery": true,
+        "specifyQuery": "keypair",
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "offset",
+              "value": "={{ $json.offset }}"
+            },
+            {
+              "name": "timeout",
+              "value": "0"
+            },
+            {
+              "name": "allowed_updates",
+              "value": "[\"message\",\"callback_query\"]"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "bf51d474-0c1d-4e38-88bc-06f153f6cd86",
+      "name": "SplitUpdates",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1.1,
+      "position": [
+        896,
+        0
+      ],
+      "parameters": {
+        "fieldToSplitOut": "result",
+        "options": {}
+      }
+    },
+    {
+      "id": "afc81d2b-0d7b-4bb6-923b-67bb7016d6dd",
+      "name": "MaxUpdateId",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        -160
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const ids = $input.all().map(i => i.json.update_id);\nreturn [{ json: { offset: String(Math.max(...ids) + 1) } }];"
+      }
+    },
+    {
+      "id": "f4acdb79-71d2-40c5-bbc9-7232befd5610",
+      "name": "SaveOffset",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1344,
+        -160
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "SpQhEI3UDwSVrhGw"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "name",
+              "condition": "eq",
+              "keyValue": "telegram_offset"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "value": "={{ $json.offset }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "value",
+              "displayName": "value",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "f6565352-8710-4186-bb96-14e944c02ec7",
+      "name": "OnlyMyChat",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.4,
+      "position": [
+        1120,
+        160
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.message?.chat?.id }}",
+              "rightValue": 123456789,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "c2",
+              "leftValue": "={{ $json.message?.text ?? \"\" }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "1a74dd1b-7e57-44bd-a62e-e36d80067727",
+      "name": "ExtractPost",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        2240,
+        160
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e-text",
+              "name": "text",
+              "type": "string",
+              "value": "={{ $json.message.text }}"
+            },
+            {
+              "id": "e-url",
+              "name": "url",
+              "type": "string",
+              "value": "={{ $json.message.text.split('\\n').join(' ').split(' ').find(w => w.startsWith('http')) ?? '' }}"
+            },
+            {
+              "id": "e-grupa",
+              "name": "grupa",
+              "type": "string",
+              "value": "fb"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "3895c0bc-b6d5-4a06-b2bc-27351b27845b",
+      "name": "RunFbExtraction",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        2464,
+        160
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "ciV3G8I8EjyILsc3"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "691e7100-a46a-46ab-baf9-8b9d85acbfc0",
+      "name": "IsUsableOffer",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2688,
+        160
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "u1",
+              "leftValue": "={{ $json.id ?? \"\" }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "u2",
+              "leftValue": "={{ $json.jeste_ponuda }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "ee09cda2-7946-4922-abe2-c1958b6ce039",
+      "name": "RemoveDuplicatePosts",
+      "type": "n8n-nodes-base.removeDuplicates",
+      "typeVersion": 2,
+      "position": [
+        2912,
+        48
+      ],
+      "parameters": {
+        "operation": "removeItemsSeenInPreviousExecutions",
+        "dedupeValue": "={{ $json.id }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "79afe961-0544-4a80-9dfe-0abea81c585a",
+      "name": "BuildFbLoadJob",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3360,
+        -64
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nconst ndjson = items.map(i => JSON.stringify(i.json)).join('\\n');\nconst metadata = {\n  configuration: {\n    load: {\n      destinationTable: { projectId: 'stan-hunter', datasetId: 'stan_hunter', tableId: 'listings' },\n      sourceFormat: 'NEWLINE_DELIMITED_JSON',\n      writeDisposition: 'WRITE_APPEND',\n      ignoreUnknownValues: true\n    }\n  }\n};\nreturn [{ json: { metadata, ndjson, count: items.length } }];"
+      }
+    },
+    {
+      "id": "308e8cbf-545b-47e6-a210-2d903bf9d146",
+      "name": "StartFbLoadJob",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        3584,
+        -64
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://bigquery.googleapis.com/upload/bigquery/v2/projects/stan-hunter/jobs?uploadType=resumable",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.metadata }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "googleApi": {
+          "name": "Google Service Account account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "59e4eb08-de1f-4c8c-9cd4-e95c12055f3d",
+      "name": "UploadFbNdjson",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        3808,
+        -64
+      ],
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $json.headers.location }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/octet-stream",
+        "body": "={{ $('BuildFbLoadJob').item.json.ndjson }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "googleApi": {
+          "name": "Google Service Account account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "e578d3db-74f7-4a09-b578-feb02484194a",
+      "name": "ReplyNotUsable",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2912,
+        304
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "123456789",
+        "text": "Nisam našao ponudu za izdavanje u toj poruci ili Claude nije uspeo da je pročita. Pošalji ceo tekst posta ili screenshot (otvori „more“ da se vidi ceo tekst).",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "546fdfce-6420-457d-8963-79b2ef2f08fb"
+    },
+    {
+      "id": "f57960da-0ee1-4428-8cae-aab4b5f30a1c",
+      "name": "ReplySummary",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        4704,
+        -64
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "123456789",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": true,
+          "parse_mode": "HTML"
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "401123d4-0702-4706-abbe-771533ded1dd"
+    },
+    {
+      "id": "e127b150-9fd8-447d-a97c-91d4b968fc62",
+      "name": "ClassifyError",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        480
+      ],
+      "parameters": {
+        "jsCode": "// GetUpdates error output: classify the error. The raw error and input item contain the token, so only this summary is passed on.\nconst raw = $json.error;\nconst e = typeof raw === 'string' ? { message: raw } : (raw ?? {});\nconst d = $json.details ?? {};\nconst fromMessage = String(e.message ?? '').match(/^(\\d{3})\\b/);\nconst status = Number(e.statusCode ?? e.status ?? d.httpCode ?? e.httpCode ?? e.response?.status ?? (fromMessage ? fromMessage[1] : NaN)) || null;\n// No HTTP status = network error (DNS, timeout, offline).\nconst transient = status === null || status >= 500 || status === 429;\nconst description = String(d.body?.description ?? d.description ?? e.error?.description ?? '')\n  .replace(/bot\\d+:[A-Za-z0-9_-]+/g, 'bot***')\n  .slice(0, 200);\nreturn { json: { status, code: typeof e.code === 'string' ? e.code : null, transient, description } };",
+        "language": "javaScript",
+        "mode": "runOnceForEachItem"
+      }
+    },
+    {
+      "id": "acf833f6-e579-4d74-bcad-a9228cdcef45",
+      "name": "IsTransient",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1120,
+        480
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "t1",
+              "leftValue": "={{ $json.transient }}",
+              "operator": {
+                "operation": "true",
+                "singleValue": true,
+                "type": "boolean"
+              },
+              "rightValue": ""
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "e144afc5-6f35-4f18-906e-c406b6ec3471",
+      "name": "SkipTransient",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1344,
+        400
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "f03f2817-dd03-4e6b-b3bf-80bc368eff47",
+      "name": "FailOnTelegramError",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        1344,
+        560
+      ],
+      "parameters": {
+        "errorMessage": "={{ 'Telegram getUpdates: HTTP ' + ($json.status ?? '?') + ($json.description ? ' ' + $json.description : '') }}",
+        "errorType": "errorMessage"
+      }
+    },
+    {
+      "id": "dcb813e3-9cdb-4ac0-9576-9b692643dd0f",
+      "name": "IsShortMessage",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1568,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "s1",
+              "leftValue": "={{ ($json.message?.text ?? '').length <= 300 && !($json.message?.text ?? '').toLowerCase().includes('http') }}",
+              "operator": {
+                "operation": "true",
+                "singleValue": true,
+                "type": "boolean"
+              },
+              "rightValue": ""
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "126f6a6e-fdcf-465c-a30d-e59221d696a4",
+      "name": "RunQuery",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        1568,
+        400
+      ],
+      "parameters": {
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        },
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "760lx7aGzDJ3F89b"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "fdbe82fd-b703-4fbc-80d6-9b1ebcea3942",
+      "name": "IsFbPost",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1792,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "f1",
+              "leftValue": "={{ $json.tip }}",
+              "operator": {
+                "operation": "equals",
+                "type": "string"
+              },
+              "rightValue": "oglas"
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "3002b476-21e1-42f2-9399-0da0c96bd5c9",
+      "name": "BackToPost",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2016,
+        280
+      ],
+      "parameters": {
+        "jsCode": "// Telegram query recognised a listing → return the original text in the shape ExtractPost expects.\nreturn { json: { message: { text: $json.original } } };",
+        "language": "javaScript",
+        "mode": "runOnceForEachItem"
+      }
+    },
+    {
+      "id": "18eae468-a7ea-4a2e-9f90-2df13a4b93f3",
+      "name": "ParseCommand",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        160
+      ],
+      "parameters": {
+        "jsCode": "// Commands: /oglas <text> → always the FB flow; /top or /pitaj <question> → always a database query; /start, /help and others → help.\n// Without a command, IsShortMessage + Claude decide. The command is stripped from the text.\nconst t = String($json.message?.text ?? '').trim();\nconst m = t.match(/^\\/(\\w+)(?:@\\w+)?\\s*([\\s\\S]*)$/);\nlet force = 'auto';\nlet text = t;\nif (m) {\n  const cmd = m[1].toLowerCase();\n  const rest = m[2].trim();\n  if (cmd === 'oglas') { force = rest ? 'post' : 'help'; text = rest; }\n  else if (cmd === 'top' || cmd === 'pitaj') { force = 'query'; text = rest || 'Daj mi 5 najboljih ponuda iz baze'; }\n  else { force = 'help'; }\n}\nreturn { json: { ...$json, message: { ...$json.message, text }, force } };",
+        "language": "javaScript",
+        "mode": "runOnceForEachItem"
+      }
+    },
+    {
+      "id": "7a199628-6a50-4801-886b-640075a5d92b",
+      "name": "RouteMessage",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1568,
+        160
+      ],
+      "parameters": {
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "bez komande"
+        },
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r1",
+                    "leftValue": "={{ $json.force }}",
+                    "operator": {
+                      "operation": "equals",
+                      "type": "string"
+                    },
+                    "rightValue": "post"
+                  }
+                ],
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                }
+              },
+              "outputKey": "oglas",
+              "renameOutput": true
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r2",
+                    "leftValue": "={{ $json.force }}",
+                    "operator": {
+                      "operation": "equals",
+                      "type": "string"
+                    },
+                    "rightValue": "query"
+                  }
+                ],
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                }
+              },
+              "outputKey": "upit",
+              "renameOutput": true
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r3",
+                    "leftValue": "={{ $json.force }}",
+                    "operator": {
+                      "operation": "equals",
+                      "type": "string"
+                    },
+                    "rightValue": "help"
+                  }
+                ],
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                }
+              },
+              "outputKey": "pomoc",
+              "renameOutput": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "3e351b97-e374-427a-afb6-145000e15002",
+      "name": "ReplyHelp",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1792,
+        0
+      ],
+      "parameters": {
+        "additionalFields": {
+          "appendAttribution": false
+        },
+        "chatId": "123456789",
+        "operation": "sendMessage",
+        "resource": "message",
+        "text": "🏠 Stan Hunter bot\n\n📸 Screenshot FB objave — Claude pročita sliku i doda oglas u bazu (pre screenshota otvori „more“)\n/oglas + tekst — dodaj FB oglas u bazu\n/top + pitanje — najbolji oglasi iz baze (npr. /top dvosobni na Vračaru do 450)\n/top bez pitanja — 5 najboljih ponuda\n\nMožeš i bez komande: kratko pitanje ide u bazu, a tekst oglasa u FB tok."
+      },
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "f57e7ccf-1eac-4660-8418-4d8278b186f5"
+    },
+    {
+      "id": "bd8adef4-b515-4350-8610-4cdc6a91cba1",
+      "name": "ReplyQuery",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2016,
+        520
+      ],
+      "parameters": {
+        "contentType": "json",
+        "jsonBody": "={{ Object.assign({ chat_id: 123456789, text: $json.text || 'Nisam uspeo da odgovorim na upit. Probaj ponovo za minut.', parse_mode: 'HTML', disable_web_page_preview: true }, $json.reply_markup ? { reply_markup: $json.reply_markup } : {}) }}",
+        "method": "POST",
+        "options": {
+          "timeout": 20000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "=https://api.telegram.org/bot{{ $('PrepareRequest').first().json.token }}/sendMessage"
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "ebe0b2bc-2391-4529-843c-e29f258bdaa1",
+      "name": "OnlyMyButton",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        1120,
+        800
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "b1",
+              "leftValue": "={{ $json.callback_query?.from?.id }}",
+              "operator": {
+                "operation": "equals",
+                "type": "number"
+              },
+              "rightValue": 123456789
+            },
+            {
+              "id": "b2",
+              "leftValue": "={{ $json.callback_query?.data ?? '' }}",
+              "operator": {
+                "operation": "startsWith",
+                "type": "string"
+              },
+              "rightValue": "del:"
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "026ccbdc-1e0d-4fbc-acc0-5f121ab5ea83",
+      "name": "PrepareDelete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        800
+      ],
+      "parameters": {
+        "jsCode": "// Click on \"❌ N\" under a /top reply: delete that listing from the table and remove the button.\n// The sandbox has no DELETE → the table is recreated without that id (like the nightly Cleanup, which also takes the backup).\nconst cq = $json.callback_query;\nconst id = String(cq.data).slice(4);\nconst ok = /^[A-Za-z0-9_-]{1,60}$/.test(id);\nconst T = '`stan-hunter.stan_hunter.listings`';\nconst query = ok\n  ? `CREATE OR REPLACE TABLE ${T} PARTITION BY DATE(upisano) AS SELECT * FROM ${T} WHERE id != '${id}' QUALIFY ROW_NUMBER() OVER (PARTITION BY id ORDER BY upisano DESC) = 1`\n  : 'SELECT 1';\nconst rows = cq.message?.reply_markup?.inline_keyboard ?? [];\nconst keyboard = rows.map(r => r.filter(b => b.callback_data !== cq.data)).filter(r => r.length);\nreturn { json: { ok, id, cq_id: cq.id, chat_id: cq.message?.chat?.id, message_id: cq.message?.message_id, keyboard, request: { query, useLegacySql: false, location: 'EU', timeoutMs: 60000 } } };",
+        "language": "javaScript",
+        "mode": "runOnceForEachItem"
+      }
+    },
+    {
+      "id": "01761c18-7fe0-4827-8001-58aa5ab35656",
+      "name": "DeleteListing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1568,
+        800
+      ],
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "contentType": "json",
+        "jsonBody": "={{ $json.request }}",
+        "method": "POST",
+        "nodeCredentialType": "googleApi",
+        "options": {
+          "timeout": 90000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/stan-hunter/queries"
+      },
+      "credentials": {
+        "googleApi": {
+          "name": "Google Service Account account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "id": "90921228-9f6c-467e-9494-e7b59e19b2a6",
+      "name": "AnswerButton",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1792,
+        800
+      ],
+      "parameters": {
+        "contentType": "json",
+        "jsonBody": "={{ { callback_query_id: $('PrepareDelete').item.json.cq_id, text: ($json.error || !$('PrepareDelete').item.json.ok) ? 'Greška pri brisanju, probaj ponovo' : '🗑 Obrisano iz baze' } }}",
+        "method": "POST",
+        "options": {
+          "timeout": 15000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "=https://api.telegram.org/bot{{ $('PrepareRequest').first().json.token }}/answerCallbackQuery"
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "fbe341f7-68d4-4bd9-ba23-2550be8fab04",
+      "name": "RemoveButton",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2016,
+        800
+      ],
+      "parameters": {
+        "contentType": "json",
+        "jsonBody": "={{ { chat_id: $('PrepareDelete').item.json.chat_id, message_id: $('PrepareDelete').item.json.message_id, reply_markup: { inline_keyboard: $('PrepareDelete').item.json.keyboard } } }}",
+        "method": "POST",
+        "options": {
+          "timeout": 15000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "=https://api.telegram.org/bot{{ $('PrepareRequest').first().json.token }}/editMessageReplyMarkup"
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "c4b836f3-1891-482e-81ca-c1788e4e0f33",
+      "name": "OnlyMyPhoto",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        1120,
+        1040
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "p1",
+              "leftValue": "={{ $json.message?.chat?.id === 123456789 && ((Array.isArray($json.message?.photo) && $json.message.photo.length > 0) || String($json.message?.document?.mime_type ?? '').startsWith('image/')) }}",
+              "operator": {
+                "operation": "true",
+                "singleValue": true,
+                "type": "boolean"
+              },
+              "rightValue": ""
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "5f019200-a188-4f00-ae9a-1a11a455a312",
+      "name": "PreparePhoto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        1040
+      ],
+      "parameters": {
+        "jsCode": "// Screenshot of an FB post: Telegram sends several sizes of the same photo → take the largest (last in the array).\n// An image sent as a file (uncompressed) arrives as a document with an image/* type.\nconst m = $json.message;\nconst photo = Array.isArray(m.photo) && m.photo.length ? m.photo[m.photo.length - 1] : null;\nconst file = photo ?? m.document;\nreturn { json: { file_id: file.file_id, file_unique_id: file.file_unique_id, caption: String(m.caption ?? '').slice(0, 1000) } };",
+        "language": "javaScript",
+        "mode": "runOnceForEachItem"
+      }
+    },
+    {
+      "id": "fdf28fde-e076-42df-9125-b7a52b21338e",
+      "name": "GetFileInfo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1568,
+        1040
+      ],
+      "parameters": {
+        "method": "GET",
+        "options": {
+          "timeout": 20000
+        },
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "file_id",
+              "value": "={{ $json.file_id }}"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "specifyQuery": "keypair",
+        "url": "=https://api.telegram.org/bot{{ $('PrepareRequest').first().json.token }}/getFile"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "d4627000-6ec9-4abf-bc7b-5f36e03e150e",
+      "name": "DownloadPhoto",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1792,
+        1040
+      ],
+      "parameters": {
+        "method": "GET",
+        "options": {
+          "response": {
+            "response": {
+              "outputPropertyName": "data",
+              "responseFormat": "file"
+            }
+          },
+          "timeout": 30000
+        },
+        "url": "=https://api.telegram.org/file/bot{{ $('PrepareRequest').first().json.token }}/{{ $json.result.file_path }}"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "2c5f627d-f154-4b25-872a-45ff1c098296",
+      "name": "ScreenshotInput",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2016,
+        1040
+      ],
+      "parameters": {
+        "jsCode": "// Input for `FB post to listing`: image = true + the binary image in the data field.\n// Telegram returns the file as application/octet-stream, but Claude only accepts image/jpeg|png|gif|webp → the type is set from the extension.\n// The `directory` field holds a URL with the bot token → removed so the token never reaches the sub-workflow or its executions.\nconst b = { ...$input.item.binary.data };\nconst ext = String(b.fileExtension || b.fileName?.split('.').pop() || 'jpg').toLowerCase();\nconst TYPES = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' };\nb.mimeType = TYPES[ext] || 'image/jpeg';\ndelete b.directory;\nb.fileName = 'screenshot.' + (TYPES[ext] ? ext : 'jpg');\nreturn { json: { text: $('PreparePhoto').item.json.caption, url: '', grupa: 'fb', image: true }, binary: { data: b } };",
+        "language": "javaScript",
+        "mode": "runOnceForEachItem"
+      }
+    },
+    {
+      "id": "aac35a89-3ba1-4d6a-aa7d-2b7be7307cb0",
+      "name": "IsNewFlat",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3136,
+        48
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "kf1",
+              "leftValue": "={{ $json.dup_isti === true }}",
+              "operator": {
+                "operation": "false",
+                "singleValue": true,
+                "type": "boolean"
+              },
+              "rightValue": ""
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "f68b5928-532b-4136-b9ba-d49c78ee55f0",
+      "name": "WaitForFbLoad",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        4032,
+        -64
+      ],
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "method": "GET",
+        "nodeCredentialType": "googleApi",
+        "options": {
+          "pagination": {
+            "pagination": {
+              "completeExpression": "={{ $response.body.status?.state === 'DONE' }}",
+              "limitPagesFetched": true,
+              "maxRequests": 10,
+              "paginationCompleteWhen": "other",
+              "paginationMode": "updateAParameterInEachRequest",
+              "parameters": {
+                "parameters": [
+                  {
+                    "name": "poll",
+                    "type": "qs",
+                    "value": "={{ $pageCount }}"
+                  }
+                ]
+              },
+              "requestInterval": 2000
+            }
+          },
+          "timeout": 20000
+        },
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "location",
+              "value": "EU"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "specifyQuery": "keypair",
+        "url": "=https://bigquery.googleapis.com/bigquery/v2/projects/stan-hunter/jobs/{{ $json.jobReference.jobId }}"
+      },
+      "credentials": {
+        "googleApi": {
+          "name": "Google Service Account account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "76616d38-d630-45d6-84c7-6774b99fbe81",
+      "name": "GetFbScore",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        4256,
+        -64
+      ],
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "contentType": "json",
+        "jsonBody": "={{ { query: 'SELECT id, ocena, lok FROM `stan-hunter.stan_hunter.listings_scored` WHERE id IN UNNEST(@ids)', useLegacySql: false, location: 'EU', timeoutMs: 30000, parameterMode: 'NAMED', queryParameters: [{ name: 'ids', parameterType: { type: 'ARRAY', arrayType: { type: 'STRING' } }, parameterValue: { arrayValues: ($('IsNewFlat').all().map(i => i.json.id).filter(Boolean).length ? $('IsNewFlat').all().map(i => i.json.id).filter(Boolean) : ['-']).map(v => ({ value: v })) } }] } }}",
+        "method": "POST",
+        "nodeCredentialType": "googleApi",
+        "options": {
+          "timeout": 45000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/stan-hunter/queries"
+      },
+      "credentials": {
+        "googleApi": {
+          "name": "Google Service Account account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "a2625e13-32bc-4c02-a58f-32080f5d9da0",
+      "name": "BuildFbReply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4480,
+        -64
+      ],
+      "parameters": {
+        "jsCode": "// One reply per FB listing that was loaded: extracted fields + the 0–100 score from the view listings_scored (same formula as everywhere else).\n// The score exists only after the load job is DONE (WaitForFbLoad); if the load failed, the reply says so instead of a score.\nconst esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst load = $('WaitForFbLoad').all().at(-1)?.json ?? {};\nconst loadErr = load.status?.errorResult ? String(load.status.errorResult.message ?? load.status.errorResult.reason ?? 'greška').slice(0, 200)\n  : load.status?.state !== 'DONE' ? 'upis nije potvrđen (BigQuery nije odgovorio)' : null;\nconst r = $input.first()?.json ?? {};\nconst fields = (r.schema?.fields || []).map(f => f.name);\nconst scores = {};\nfor (const row of r.rows || []) {\n  const o = Object.fromEntries(row.f.map((c, i) => [fields[i], c.v]));\n  scores[o.id] = { ocena: o.ocena === null ? null : Math.round(Number(o.ocena)), lok: o.lok === null ? null : Number(o.lok) };\n}\nreturn $('IsNewFlat').all().map(({ json: j }) => {\n  const s = scores[j.id] || {};\n  const lines = [\n    `✅ <b>Dodato:</b> ${esc(j.naslov)}`,\n    `🏠 ${j.cena ?? '?'} € · ${j.m2 ?? '?'} m² · ${j.sobe ?? '?'} soba`,\n    s.ocena !== null && s.ocena !== undefined ? `⭐ <b>${s.ocena}</b>/100` : null,\n    `📍 ${esc(j.naselje || '?')}, ${esc(j.opstina || '?')}${s.lok ? ` (lokacija ${s.lok}/5)` : ''}`,\n    j.kvalitet !== null && j.kvalitet !== undefined ? `📸 Slike: ${j.kvalitet}/5${j.kvalitet_opis ? ' – ' + esc(j.kvalitet_opis) : ''}` : null,\n    `🐾 Ljubimci: ${esc(j.kucni_ljubimci)} · 💶 Depozit: ${j.depozit_eur ?? '?'} €`,\n    `💼 Provizija: ${esc(j.provizija ?? 'nije navedena')} · Režije: ${j.rezije_eur ?? '?'} €`,\n    `⚠️ ${j.sumnjiv_oglas ? esc(j.sumnjiv_razlog || 'proveri oglas') : 'ništa sumnjivo'}`,\n    `🎯 Prolazi filter: ${j.prosao_filter ? 'da' : 'ne'}`,\n    j.dup_id && j.dup_isti === false ? `🔎 Sličan oglas na ${esc(j.dup_izvor)}, ali nije isti stan: ${esc(j.dup_razlog || '')}` : null,\n    j.dup_id && j.dup_isti === null ? `🔎 Možda isti stan kao <a href=\"${esc(j.dup_url)}\">${esc(j.dup_izvor)} oglas</a> (nisam mogao da uporedim slike)` : null,\n    loadErr ? `❗ Upis u bazu nije uspeo: ${esc(loadErr)}` : null\n  ].filter(Boolean);\n  return { json: { text: lines.join('\\n') } };\n});",
+        "language": "javaScript",
+        "mode": "runOnceForAllItems"
+      }
+    },
+    {
+      "id": "dfaa72d0-9bc1-4eaa-a76a-f62fbc71bc67",
+      "name": "ReplyKnownFlat",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3360,
+        160
+      ],
+      "parameters": {
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": true,
+          "parse_mode": "HTML"
+        },
+        "chatId": "123456789",
+        "operation": "sendMessage",
+        "resource": "message",
+        "text": "={{ (() => { const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); const j = $json; return `ℹ️ <b>Ovaj stan već imamo</b> (${esc(j.dup_izvor)}), nije dodat ponovo\\n🏠 ${j.cena ?? '?'} € · ${j.m2 ?? '?'} m² · ${j.sobe ?? '?'} soba` + (j.dup_ocena !== null && j.dup_ocena !== undefined ? `\\n⭐ <b>${Math.round(j.dup_ocena)}</b>/100` : '') + `\\n📍 ${esc(j.naselje || '?')}, ${esc(j.opstina || '?')}${j.dup_lok ? ` (lokacija ${j.dup_lok}/5)` : ''}` + (j.dup_kvalitet !== null && j.dup_kvalitet !== undefined ? `\\n📸 Slike: ${j.dup_kvalitet}/5${j.dup_kvalitet_opis ? ' – ' + esc(j.dup_kvalitet_opis) : ''}` : '') + (j.dup_razlog ? `\\n🤖 ${esc(j.dup_razlog)}` : '') + `\\n🔗 <a href=\"${esc(j.dup_url)}\">Otvori oglas</a>`; })() }}"
+      },
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "c18f5eb6-be56-4107-b993-7cba2a62e098"
+    }
+  ],
+  "connections": {
+    "Every2Min": {
+      "main": [
+        [
+          {
+            "node": "GetBotState",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GetBotState": {
+      "main": [
+        [
+          {
+            "node": "PrepareRequest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PrepareRequest": {
+      "main": [
+        [
+          {
+            "node": "GetUpdates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GetUpdates": {
+      "main": [
+        [
+          {
+            "node": "SplitUpdates",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "ClassifyError",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SplitUpdates": {
+      "main": [
+        [
+          {
+            "node": "MaxUpdateId",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "OnlyMyChat",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "OnlyMyButton",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "OnlyMyPhoto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MaxUpdateId": {
+      "main": [
+        [
+          {
+            "node": "SaveOffset",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ExtractPost": {
+      "main": [
+        [
+          {
+            "node": "RunFbExtraction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RunFbExtraction": {
+      "main": [
+        [
+          {
+            "node": "IsUsableOffer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IsUsableOffer": {
+      "main": [
+        [
+          {
+            "node": "RemoveDuplicatePosts",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "ReplyNotUsable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BuildFbLoadJob": {
+      "main": [
+        [
+          {
+            "node": "StartFbLoadJob",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "StartFbLoadJob": {
+      "main": [
+        [
+          {
+            "node": "UploadFbNdjson",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ClassifyError": {
+      "main": [
+        [
+          {
+            "node": "IsTransient",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IsTransient": {
+      "main": [
+        [
+          {
+            "node": "SkipTransient",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "FailOnTelegramError",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IsShortMessage": {
+      "main": [
+        [
+          {
+            "node": "RunQuery",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "ExtractPost",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RunQuery": {
+      "main": [
+        [
+          {
+            "node": "IsFbPost",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IsFbPost": {
+      "main": [
+        [
+          {
+            "node": "BackToPost",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "ReplyQuery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BackToPost": {
+      "main": [
+        [
+          {
+            "node": "ExtractPost",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OnlyMyChat": {
+      "main": [
+        [
+          {
+            "node": "ParseCommand",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ParseCommand": {
+      "main": [
+        [
+          {
+            "node": "RouteMessage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RouteMessage": {
+      "main": [
+        [
+          {
+            "node": "ExtractPost",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "RunQuery",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "ReplyHelp",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IsShortMessage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OnlyMyButton": {
+      "main": [
+        [
+          {
+            "node": "PrepareDelete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PrepareDelete": {
+      "main": [
+        [
+          {
+            "node": "DeleteListing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DeleteListing": {
+      "main": [
+        [
+          {
+            "node": "AnswerButton",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AnswerButton": {
+      "main": [
+        [
+          {
+            "node": "RemoveButton",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OnlyMyPhoto": {
+      "main": [
+        [
+          {
+            "node": "PreparePhoto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PreparePhoto": {
+      "main": [
+        [
+          {
+            "node": "GetFileInfo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GetFileInfo": {
+      "main": [
+        [
+          {
+            "node": "DownloadPhoto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DownloadPhoto": {
+      "main": [
+        [
+          {
+            "node": "ScreenshotInput",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ScreenshotInput": {
+      "main": [
+        [
+          {
+            "node": "RunFbExtraction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RemoveDuplicatePosts": {
+      "main": [
+        [
+          {
+            "node": "IsNewFlat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IsNewFlat": {
+      "main": [
+        [
+          {
+            "node": "BuildFbLoadJob",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "ReplyKnownFlat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "UploadFbNdjson": {
+      "main": [
+        [
+          {
+            "node": "WaitForFbLoad",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WaitForFbLoad": {
+      "main": [
+        [
+          {
+            "node": "GetFbScore",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GetFbScore": {
+      "main": [
+        [
+          {
+            "node": "BuildFbReply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BuildFbReply": {
+      "main": [
+        [
+          {
+            "node": "ReplySummary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "timezone": "Europe/Belgrade",
+    "saveManualExecutions": false,
+    "saveDataSuccessExecution": "none",
+    "errorWorkflow": "UTOIDEVnd1km2Fjp"
+  },
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  },
+  "nodeGroups": [
+    {
+      "id": "baf1cd3c-b0eb-4aa5-b7ff-24fa824fb859",
+      "name": "Offset",
+      "nodeIds": [
+        "afc81d2b-0d7b-4bb6-923b-67bb7016d6dd",
+        "f4acdb79-71d2-40c5-bbc9-7232befd5610"
+      ],
+      "description": "Remember the last update_id so a message is never processed twice"
+    },
+    {
+      "id": "da8e34c5-b126-403f-9b9c-cbdf2711fe88",
+      "name": "BigQuery load",
+      "nodeIds": [
+        "79afe961-0544-4a80-9dfe-0abea81c585a",
+        "308e8cbf-545b-47e6-a210-2d903bf9d146",
+        "59e4eb08-de1f-4c8c-9cd4-e95c12055f3d"
+      ],
+      "description": "Batch load job (resumable upload) into stan_hunter.listings"
+    },
+    {
+      "id": "1d56e422-44c4-49c9-8a0f-9ee9698a3bd9",
+      "name": "Read Telegram",
+      "nodeIds": [
+        "d36d0dff-e69f-40f1-92a4-41eb462c99e1",
+        "a4334364-0479-4e81-a8dc-651eecbab5f1",
+        "cfd58850-b0a8-4de2-aa9f-45b1a4c2e38d",
+        "bf51d474-0c1d-4e38-88bc-06f153f6cd86",
+        "e127b150-9fd8-447d-a97c-91d4b968fc62",
+        "acf833f6-e579-4d74-bcad-a9228cdcef45",
+        "e144afc5-6f35-4f18-906e-c406b6ec3471",
+        "f03f2817-dd03-4e6b-b3bf-80bc368eff47"
+      ],
+      "description": "Token and offset from the data table, getUpdates, one item per update. Telegram 5xx/429/network → skip; other errors → Error alerts"
+    },
+    {
+      "id": "71347156-31e6-4a67-aeef-51cb805a9a0e",
+      "name": "Delete button",
+      "nodeIds": [
+        "ebe0b2bc-2391-4529-843c-e29f258bdaa1",
+        "026ccbdc-1e0d-4fbc-acc0-5f121ab5ea83",
+        "01761c18-7fe0-4827-8001-58aa5ab35656",
+        "90921228-9f6c-467e-9494-e7b59e19b2a6",
+        "fbe341f7-68d4-4bd9-ba23-2550be8fab04"
+      ],
+      "description": "Click on ❌ N under /top → listing is deleted from BigQuery, the button disappears"
+    },
+    {
+      "id": "7ff3db5c-8897-436e-89e0-9bfcf52e3bf4",
+      "name": "Screenshot (Claude vision)",
+      "nodeIds": [
+        "c4b836f3-1891-482e-81ca-c1788e4e0f33",
+        "5f019200-a188-4f00-ae9a-1a11a455a312",
+        "fdf28fde-e076-42df-9125-b7a52b21338e",
+        "d4627000-6ec9-4abf-bc7b-5f36e03e150e",
+        "2c5f627d-f154-4b25-872a-45ff1c098296"
+      ],
+      "description": "Photo from my chat → getFile → download largest size → FB post to listing (Claude reads the screenshot)"
+    }
+  ],
+  "sourceWorkflowId": null,
+  "tags": [
+    "intake",
+    "stan-hunter"
+  ],
+  "versionMetadata": {
+    "name": "FB: known flat reply, score after load",
+    "description": "FB listing confirmed as an existing flat (Claude vision) → short reply with the existing listing's score and link, not loaded again. New FB listing → load → wait for load job → score from listings_scored → reply with score, photo quality and load status."
+  }
+}
