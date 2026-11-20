@@ -12,14 +12,14 @@
       "typeVersion": 1.4,
       "position": [
         0,
-        0
+        -80
       ],
       "parameters": {
         "rule": {
           "interval": [
             {
-              "expression": "2,32 8-23 * * *",
-              "field": "cronExpression"
+              "field": "cronExpression",
+              "expression": "2,32 8-23 * * *"
             }
           ]
         }
@@ -32,16 +32,14 @@
       "typeVersion": 1.4,
       "position": [
         224,
-        48
+        -80
       ],
       "parameters": {
-        "source": "database",
         "workflowId": {
           "__rl": true,
           "mode": "id",
           "value": "jwTYaykBV26hWQlG"
         },
-        "mode": "once",
         "options": {
           "waitForSubWorkflow": true
         }
@@ -56,10 +54,9 @@
       "typeVersion": 3.2,
       "position": [
         448,
-        144
+        96
       ],
       "parameters": {
-        "mode": "append",
         "numberInputs": 3
       }
     },
@@ -70,16 +67,14 @@
       "typeVersion": 1.4,
       "position": [
         224,
-        240
+        112
       ],
       "parameters": {
-        "source": "database",
         "workflowId": {
           "__rl": true,
           "mode": "id",
           "value": "ly9pjYMinHLJnJvX"
         },
-        "mode": "once",
         "options": {
           "waitForSubWorkflow": true
         }
@@ -94,7 +89,7 @@
       "typeVersion": 1,
       "position": [
         0,
-        288
+        304
       ],
       "parameters": {}
     },
@@ -104,8 +99,8 @@
       "type": "n8n-nodes-base.filter",
       "typeVersion": 2.4,
       "position": [
-        672,
-        144
+        656,
+        -288
       ],
       "parameters": {
         "conditions": {
@@ -138,8 +133,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2016,
-        144
+        1376,
+        96
       ],
       "parameters": {
         "jsCode": "// One bad value makes BigQuery reject the whole load job, so timestamps are checked here:\n// an unparseable upisano is replaced with now, an unparseable objavljeno becomes null.\nconst nowIso = new Date().toISOString();\nconst okTs = v => typeof v === 'string' && /^\\d{4}-\\d{2}-\\d{2}T/.test(v) && !isNaN(Date.parse(v));\nconst items = $input.all();\nconst ndjson = items.map(i => {\n  const j = { ...i.json };\n  if (!okTs(j.upisano)) j.upisano = nowIso;\n  if (j.objavljeno !== null && j.objavljeno !== undefined && !okTs(j.objavljeno)) j.objavljeno = null;\n  return JSON.stringify(j);\n}).join('\\n');\n\nconst metadata = {\n  configuration: {\n    load: {\n      destinationTable: {\n        projectId: 'stan-hunter',\n        datasetId: 'stan_hunter',\n        tableId: 'listings'\n      },\n      sourceFormat: 'NEWLINE_DELIMITED_JSON',\n      writeDisposition: 'WRITE_APPEND'\n    }\n  }\n};\n\nreturn [{ json: { metadata, ndjson, count: items.length } }];"
@@ -151,8 +146,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        2240,
-        144
+        1600,
+        96
       ],
       "parameters": {
         "method": "POST",
@@ -160,7 +155,6 @@
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "googleApi",
         "sendBody": true,
-        "contentType": "json",
         "specifyBody": "json",
         "jsonBody": "={{ $json.metadata }}",
         "options": {
@@ -186,8 +180,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        2464,
-        144
+        1824,
+        96
       ],
       "parameters": {
         "method": "PUT",
@@ -217,8 +211,8 @@
       "type": "n8n-nodes-base.filter",
       "typeVersion": 2.4,
       "position": [
-        3584,
-        144
+        1392,
+        448
       ],
       "parameters": {
         "conditions": {
@@ -251,18 +245,16 @@
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
       "position": [
-        5152,
-        48
+        2960,
+        336
       ],
       "parameters": {
-        "resource": "message",
         "operation": "sendPhoto",
         "chatId": "123456789",
         "file": "={{ $json.slika }}",
         "additionalFields": {
           "caption": "={{ (() => { const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); const ocena = ($json.ocena ?? null) !== null ? `\\n⭐ <b>${$json.ocena}</b>/100` : ''; const troskovi = [$json.provizija ? `Provizija: ${esc($json.provizija)}` : null, ($json.rezije_eur ?? null) !== null ? `Režije ~${$json.rezije_eur} €` : null, $json.min_period_meseci ? `Min. ${$json.min_period_meseci} mes.` : null].filter(Boolean).join(' · '); const slike = ($json.kvalitet ?? null) !== null ? `\\n📸 Slike: ${$json.kvalitet}/5${$json.kvalitet_opis ? ' – ' + esc($json.kvalitet_opis) : ''}` : ''; const oglasivac = $json.oglasivac ? `\\n🏢 ${esc($json.oglasivac)}${$json.bez_provizije === 'da' ? ' · bez provizije' : ''}` : ''; return `🏠 <b>${$json.cena} €</b> · ${$json.m2} m² · ${$json.sobe ?? '?'} soba${ocena}\\n📍 ${esc($json.naselje)}, ${esc($json.opstina)}${($json.lok ?? null) !== null ? ` (lokacija ${$json.lok}/5)` : ''}\\n🛋 Namešten: ${$json.namesten}${slike}\\n🐾 Ljubimci: ${$json.kucni_ljubimci ?? 'nepoznato'} · 💶 Depozit: ${$json.depozit_eur ?? '?'} €${oglasivac}` + (troskovi ? `\\n💼 ${troskovi}` : '') + ($json.sumnjiv_oglas === true ? `\\n⚠️ Sumnjivo: ${esc($json.sumnjiv_razlog || 'proveri oglas')}` : '') + `\\n🌐 ${$json.izvor}\\n🔗 <a href=\"${$json.url}\">Otvori oglas</a>`; })() }}",
-          "parse_mode": "HTML",
-          "appendAttribution": false
+          "parse_mode": "HTML"
         }
       },
       "credentials": {
@@ -271,8 +263,7 @@
         }
       },
       "onError": "continueRegularOutput",
-      "webhookId": "35f81cac-e96e-49e4-90e4-bb92038a0535",
-      "disabled": false
+      "webhookId": "35f81cac-e96e-49e4-90e4-bb92038a0535"
     },
     {
       "id": "60fef53e-ef3e-4547-a71b-4ead42638560",
@@ -281,18 +272,16 @@
       "typeVersion": 1.4,
       "position": [
         224,
-        480
+        304
       ],
       "parameters": {
-        "mode": "once",
-        "options": {
-          "waitForSubWorkflow": true
-        },
-        "source": "database",
         "workflowId": {
           "__rl": true,
           "mode": "id",
           "value": "jefrXjfqueYB5NiV"
+        },
+        "options": {
+          "waitForSubWorkflow": true
         }
       },
       "onError": "continueRegularOutput",
@@ -304,13 +293,11 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        672,
-        400
+        768,
+        560
       ],
       "parameters": {
-        "jsCode": "// Source health. Run* nodes use continueRegularOutput, so a failing source does not fail the orchestrator\n// and does not trigger Error alerts. Errors or 0 listings per source are caught here instead.\n// Alert after 2 bad runs in a row (~1 h), reminder every 12 (~6 h), message when the source recovers.\nconst SOURCES = { Run4zida: '4zida', RunCityExpert: 'CityExpert', RunNekretnine: 'Nekretnine.rs' };\nconst ALERT_AFTER = 2;\nconst REMIND_EVERY = 12;\n// The Telegram node sends HTML, so <, > and & must be escaped.\nconst esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n\nconst store = $getWorkflowStaticData('global');\nconst health = { ...(store.sourceHealth || {}) };\nconst lines = [];\n\nfor (const [nodeName, label] of Object.entries(SOURCES)) {\n  let items;\n  try { items = $(nodeName).all(); } catch (e) { continue; } // node did not run in this execution\n  const errItem = items.find(i => i.json.error);\n  const count = items.filter(i => i.json.id).length;\n  let problem = null;\n  if (errItem) {\n    const e = errItem.json.error;\n    problem = 'greška: ' + esc(String(typeof e === 'string' ? e : (e?.message ?? JSON.stringify(e))).slice(0, 150));\n  } else if (count === 0) {\n    problem = '0 oglasa';\n  }\n  const prev = health[label] || { fails: 0, alerted: false };\n  if (problem) {\n    const fails = prev.fails + 1;\n    const alert = fails === ALERT_AFTER || (fails > ALERT_AFTER && (fails - ALERT_AFTER) % REMIND_EVERY === 0);\n    if (alert) lines.push(`❌ ${label}: ${problem} (${fails}× zaredom)`);\n    health[label] = { fails, alerted: prev.alerted || alert };\n  } else {\n    if (prev.alerted) lines.push(`✅ ${label} ponovo radi (${count} oglasa)`);\n    health[label] = { fails: 0, alerted: false };\n  }\n}\n\nstore.sourceHealth = health;\nif (!lines.length) return [];\nreturn [{ json: { text: `🩺 Stan Hunter izvori\\n${lines.join('\\n')}` } }];",
-        "language": "javaScript",
-        "mode": "runOnceForAllItems"
+        "jsCode": "// Source health. Run* nodes use continueRegularOutput, so a failing source does not fail the orchestrator\n// and does not trigger Error alerts. Errors or 0 listings per source are caught here instead.\n// Alert after 2 bad runs in a row (~1 h), reminder every 12 (~6 h), message when the source recovers.\nconst SOURCES = { Run4zida: '4zida', RunCityExpert: 'CityExpert', RunNekretnine: 'Nekretnine.rs' };\nconst ALERT_AFTER = 2;\nconst REMIND_EVERY = 12;\n// The Telegram node sends HTML, so <, > and & must be escaped.\nconst esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n\nconst store = $getWorkflowStaticData('global');\nconst health = { ...(store.sourceHealth || {}) };\nconst lines = [];\n\nfor (const [nodeName, label] of Object.entries(SOURCES)) {\n  let items;\n  try { items = $(nodeName).all(); } catch (e) { continue; } // node did not run in this execution\n  const errItem = items.find(i => i.json.error);\n  const count = items.filter(i => i.json.id).length;\n  let problem = null;\n  if (errItem) {\n    const e = errItem.json.error;\n    problem = 'greška: ' + esc(String(typeof e === 'string' ? e : (e?.message ?? JSON.stringify(e))).slice(0, 150));\n  } else if (count === 0) {\n    problem = '0 oglasa';\n  }\n  const prev = health[label] || { fails: 0, alerted: false };\n  if (problem) {\n    const fails = prev.fails + 1;\n    const alert = fails === ALERT_AFTER || (fails > ALERT_AFTER && (fails - ALERT_AFTER) % REMIND_EVERY === 0);\n    if (alert) lines.push(`❌ ${label}: ${problem} (${fails}× zaredom)`);\n    health[label] = { fails, alerted: prev.alerted || alert };\n  } else {\n    if (prev.alerted) lines.push(`✅ ${label} ponovo radi (${count} oglasa)`);\n    health[label] = { fails: 0, alerted: false };\n  }\n}\n\nstore.sourceHealth = health;\nif (!lines.length) return [];\nreturn [{ json: { text: `🩺 Stan Hunter izvori\\n${lines.join('\\n')}` } }];"
       }
     },
     {
@@ -319,18 +306,16 @@
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
       "position": [
-        896,
-        400
+        992,
+        560
       ],
       "parameters": {
+        "chatId": "123456789",
+        "text": "={{ $json.text }}",
         "additionalFields": {
           "appendAttribution": false,
           "parse_mode": "HTML"
-        },
-        "chatId": "123456789",
-        "operation": "sendMessage",
-        "resource": "message",
-        "text": "={{ $json.text }}"
+        }
       },
       "credentials": {
         "telegramApi": {
@@ -349,13 +334,11 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3808,
-        144
+        1616,
+        448
       ],
       "parameters": {
-        "jsCode": "// Same flat on several sites: fingerprint = price + m² + rooms + municipality (diacritics and the word \"opština\" removed).\n// Municipality, not neighbourhood: sites name the neighbourhood of the same flat differently (18.11.: 4zida \"Pravni fakultet - Vračar\" vs Nekretnine.rs \"Hram Svetog Save - Neimar - Čubura\").\n// A fingerprint collision is NOT dropped any more (two different flats can share it): route = 'check' sends the pair to Claude vision,\n// which compares the cover photos. Only a confirmed same flat becomes a one-line note; anything unclear gets the full message.\n// route: 'new' = full message | 'check' = compare with dup_of first | 'legacy' = collides with a fingerprint saved before 19.11. (no photo to compare) → one-line note.\n// Without size or location there is no fingerprint → full message. Fingerprints live 30 days in static data (production runs only).\nconst norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/\\bopstina\\b/g, '').replace(/\\s+/g, ' ').trim();\nconst DAY = 24 * 60 * 60 * 1000;\nconst now = Date.now();\nconst store = $getWorkflowStaticData('global');\nconst seen = {};\nfor (const [k, v] of Object.entries(store.sentFingerprints || {})) {\n  const t = typeof v === 'number' ? v : v?.t;\n  if (t && now - t < 30 * DAY) seen[k] = v;\n}\nconst out = [];\nfor (const item of $input.all()) {\n  const j = item.json;\n  const place = norm(j.opstina) || norm(j.naselje);\n  if (j.cena === null || j.cena === undefined || j.m2 === null || j.m2 === undefined || !place) {\n    out.push({ json: { ...j, route: 'new' } });\n    continue;\n  }\n  const base = `${j.cena}|${j.m2}|${j.sobe ?? '-'}`;\n  const fp = `${base}|o:${place}`;\n  const prev = seen[fp] ?? seen[`${base}|${norm(j.naselje)}`]; // second key: format before 18.11.\n  if (prev === undefined) {\n    seen[fp] = { t: now, id: j.id, url: j.url, izvor: j.izvor, slika: j.slika, cena: j.cena, m2: j.m2, sobe: j.sobe ?? null, opstina: j.opstina, naselje: j.naselje };\n    out.push({ json: { ...j, route: 'new' } });\n  } else if (typeof prev === 'number' || !prev.slika) {\n    out.push({ json: { ...j, route: 'legacy' } });\n  } else {\n    out.push({ json: { ...j, route: 'check', dup_of: prev } });\n  }\n}\nstore.sentFingerprints = seen;\nreturn out;",
-        "language": "javaScript",
-        "mode": "runOnceForAllItems"
+        "jsCode": "// Same flat on several sites: fingerprint = price + m² + rooms + municipality (diacritics and the word \"opština\" removed).\n// Municipality, not neighbourhood: sites name the neighbourhood of the same flat differently (18.11.: 4zida \"Pravni fakultet - Vračar\" vs Nekretnine.rs \"Hram Svetog Save - Neimar - Čubura\").\n// The fingerprint only proposes candidates; Claude vision decides (`Dedup - same flat check`), because two different flats can share it.\n// Each fingerprint keeps the last 3 flats sent with it (newest first) and a listing is compared with all of them, including listings\n// from this same run (20.11.: after a day offline, two new 4zida ads of one flat were each compared only with an older, different flat).\n// route: 'new' = full message | 'check' = compare with dup_candidates | 'legacy' = collides only with entries without a photo (before 19.11.) → one-line note.\n// Without price, size or location there is no fingerprint → full message. Fingerprints live 30 days in static data (production runs only).\nconst norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/\\bopstina\\b/g, '').replace(/\\s+/g, ' ').trim();\nconst DAY = 24 * 60 * 60 * 1000;\nconst KEEP = 3;\nconst now = Date.now();\nconst store = $getWorkflowStaticData('global');\nconst seen = {};\nfor (const [k, v] of Object.entries(store.sentFingerprints || {})) {\n  // Formats: list of entries (from 20.11.), one entry (19.11.), only a timestamp (before 19.11.).\n  const list = (Array.isArray(v) ? v : [v]).map(e => (typeof e === 'number' ? { t: e } : e)).filter(e => e && e.t && now - e.t < 30 * DAY);\n  if (list.length) seen[k] = list.slice(0, KEEP);\n}\nconst out = [];\nfor (const item of $input.all()) {\n  const j = item.json;\n  const place = norm(j.opstina) || norm(j.naselje);\n  if (j.cena === null || j.cena === undefined || j.m2 === null || j.m2 === undefined || !place) {\n    out.push({ json: { ...j, route: 'new' } });\n    continue;\n  }\n  const base = `${j.cena}|${j.m2}|${j.sobe ?? '-'}`;\n  const fp = `${base}|o:${place}`;\n  const prev = [];\n  for (const e of [...(seen[fp] || []), ...(seen[`${base}|${norm(j.naselje)}`] || [])]) { // second key: format before 18.11.\n    if (e.id && prev.some(p => p.id === e.id)) continue;\n    prev.push(e);\n  }\n  const candidates = prev.filter(e => e.slika);\n  if (candidates.length) out.push({ json: { ...j, route: 'check', dup_candidates: candidates } });\n  else if (prev.length) out.push({ json: { ...j, route: 'legacy' } });\n  else out.push({ json: { ...j, route: 'new' } });\n  const entry = { t: now, id: j.id, url: j.url, izvor: j.izvor, slika: j.slika, cena: j.cena, m2: j.m2, sobe: j.sobe ?? null, opstina: j.opstina, naselje: j.naselje };\n  seen[fp] = [entry, ...(seen[fp] || []).filter(e => e.id !== j.id)].slice(0, KEEP);\n}\nstore.sentFingerprints = seen;\nreturn out;"
       }
     },
     {
@@ -364,21 +347,20 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        896,
-        144
+        912,
+        -160
       ],
       "parameters": {
-        "authentication": "predefinedCredentialType",
-        "contentType": "json",
-        "jsonBody": "={{ { query: 'SELECT DISTINCT id FROM `stan-hunter.stan_hunter.listings` WHERE id IS NOT NULL', useLegacySql: false, location: 'EU', timeoutMs: 30000, maxResults: 20000 } }}",
         "method": "POST",
+        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/stan-hunter/queries",
+        "authentication": "predefinedCredentialType",
         "nodeCredentialType": "googleApi",
-        "options": {
-          "timeout": 60000
-        },
         "sendBody": true,
         "specifyBody": "json",
-        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/stan-hunter/queries"
+        "jsonBody": "={{ { query: 'SELECT DISTINCT id FROM `stan-hunter.stan_hunter.listings` WHERE id IS NOT NULL', useLegacySql: false, location: 'EU', timeoutMs: 30000, maxResults: 20000 } }}",
+        "options": {
+          "timeout": 60000
+        }
       },
       "credentials": {
         "googleApi": {
@@ -396,13 +378,11 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1008,
-        144
+        1136,
+        -160
       ],
       "parameters": {
-        "jsCode": "// New = listings whose id is not in BigQuery yet.\n// Previously: Remove Duplicates (n8n memory) → a listing deleted from the table (❌ button, nightly Cleanup) never came back.\n// Now: if the site lists it again, it returns to the table. If the BigQuery query fails, the run fails (alert) and listings are picked up next run.\nconst r = $input.first().json;\nconst rows = r.rows || [];\nif (r.jobComplete === false || Number(r.totalRows ?? rows.length) > rows.length) {\n  throw new Error(`GetKnownIds: nepotpun odgovor BigQuery-ja (${rows.length} od ${r.totalRows})`);\n}\nconst known = new Set(rows.map(row => row.f[0].v));\nconst seen = new Set();\nreturn $('KeepValidListings').all().filter(i => {\n  const id = i.json.id;\n  if (known.has(id) || seen.has(id)) return false;\n  seen.add(id);\n  return true;\n});",
-        "language": "javaScript",
-        "mode": "runOnceForAllItems"
+        "jsCode": "// New = listings whose id is not in BigQuery yet.\n// Previously: Remove Duplicates (n8n memory) → a listing deleted from the table (❌ button, nightly Cleanup) never came back.\n// Now: if the site lists it again, it returns to the table. If the BigQuery query fails, the run fails (alert) and listings are picked up next run.\nconst r = $input.first().json;\nconst rows = r.rows || [];\nif (r.jobComplete === false || Number(r.totalRows ?? rows.length) > rows.length) {\n  throw new Error(`GetKnownIds: nepotpun odgovor BigQuery-ja (${rows.length} od ${r.totalRows})`);\n}\nconst known = new Set(rows.map(row => row.f[0].v));\nconst seen = new Set();\nreturn $('KeepValidListings').all().filter(i => {\n  const id = i.json.id;\n  if (known.has(id) || seen.has(id)) return false;\n  seen.add(id);\n  return true;\n});"
       }
     },
     {
@@ -411,19 +391,17 @@
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.4,
       "position": [
-        1120,
-        144
+        800,
+        96
       ],
       "parameters": {
-        "mode": "once",
-        "options": {
-          "waitForSubWorkflow": true
-        },
-        "source": "database",
         "workflowId": {
           "__rl": true,
           "mode": "id",
           "value": "f78u3VESIFSb2eG8"
+        },
+        "options": {
+          "waitForSubWorkflow": true
         }
       },
       "onError": "continueRegularOutput",
@@ -435,13 +413,11 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1792,
-        144
+        1472,
+        96
       ],
       "parameters": {
-        "jsCode": "// Layer B: `Enrich - listing description (Claude)` returns { id, fields } for 4zida listings whose description was read.\n// Photos: `Enrich - photo quality (Claude vision)` returns { id, kvalitet, kvalitet_opis } for listings with a cover photo.\n// Both are merged into the original new listings. If enrichment fails or returns nothing, listings continue unchanged.\n// Structured fields from the site (layer A) win; the LLM only fills what is unknown.\nconst orig = $('OnlyNewFlats').all();\nconst extra = {};\nfor (const i of $('EnrichNew').all()) if (i.json && i.json.id && i.json.enrich_ok === true) extra[i.json.id] = i.json;\nconst photos = {};\nfor (const i of $input.all()) if (i.json && i.json.id && i.json.photo_ok === true) photos[i.json.id] = i.json;\nreturn orig.map(i => {\n  const j = { ...i.json };\n  const ph = photos[j.id];\n  if (ph) { j.kvalitet = ph.kvalitet ?? null; j.kvalitet_opis = ph.kvalitet_opis ?? null; }\n  const e = extra[j.id];\n  if (!e) return { json: j };\n  const unknown = v => v === null || v === undefined || v === '' || v === 'nepoznato';\n  j.provizija = e.provizija ?? j.provizija ?? null;\n  j.rezije_eur = e.rezije_eur ?? j.rezije_eur ?? null;\n  j.min_period_meseci = e.min_period_meseci ?? j.min_period_meseci ?? null;\n  j.sumnjiv_oglas = e.sumnjiv_oglas === true;\n  j.sumnjiv_razlog = e.sumnjiv_razlog ?? null;\n  if (unknown(j.depozit_eur) && e.depozit_eur !== null && e.depozit_eur !== undefined) j.depozit_eur = e.depozit_eur;\n  if (unknown(j.namesten) && !unknown(e.namesten)) j.namesten = e.namesten;\n  if (unknown(j.kucni_ljubimci) && !unknown(e.kucni_ljubimci)) j.kucni_ljubimci = e.kucni_ljubimci;\n  if (j.namesten === 'ne') j.prosao_filter = false; // filter: unfurnished does not pass\n  return { json: j };\n});",
-        "language": "javaScript",
-        "mode": "runOnceForAllItems"
+        "jsCode": "// Layer B: `Enrich - listing description (Claude)` returns { id, fields } for 4zida listings whose description was read.\n// Photos: `Enrich - photo quality (Claude vision)` returns { id, kvalitet, kvalitet_opis } for listings with a cover photo.\n// Both are merged into the original new listings. If enrichment fails or returns nothing, listings continue unchanged.\n// Structured fields from the site (layer A) win; the LLM only fills what is unknown.\nconst orig = $('OnlyNewFlats').all();\nconst extra = {};\nfor (const i of $('EnrichNew').all()) if (i.json && i.json.id && i.json.enrich_ok === true) extra[i.json.id] = i.json;\nconst photos = {};\nfor (const i of $input.all()) if (i.json && i.json.id && i.json.photo_ok === true) photos[i.json.id] = i.json;\nreturn orig.map(i => {\n  const j = { ...i.json };\n  const ph = photos[j.id];\n  if (ph) { j.kvalitet = ph.kvalitet ?? null; j.kvalitet_opis = ph.kvalitet_opis ?? null; }\n  const e = extra[j.id];\n  if (!e) return { json: j };\n  const unknown = v => v === null || v === undefined || v === '' || v === 'nepoznato';\n  j.provizija = e.provizija ?? j.provizija ?? null;\n  j.rezije_eur = e.rezije_eur ?? j.rezije_eur ?? null;\n  j.min_period_meseci = e.min_period_meseci ?? j.min_period_meseci ?? null;\n  j.sumnjiv_oglas = e.sumnjiv_oglas === true;\n  j.sumnjiv_razlog = e.sumnjiv_razlog ?? null;\n  if (unknown(j.depozit_eur) && e.depozit_eur !== null && e.depozit_eur !== undefined) j.depozit_eur = e.depozit_eur;\n  if (unknown(j.namesten) && !unknown(e.namesten)) j.namesten = e.namesten;\n  if (unknown(j.kucni_ljubimci) && !unknown(e.kucni_ljubimci)) j.kucni_ljubimci = e.kucni_ljubimci;\n  if (j.namesten === 'ne') j.prosao_filter = false; // filter: unfurnished does not pass\n  return { json: j };\n});"
       }
     },
     {
@@ -450,13 +426,11 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1344,
-        144
+        1024,
+        96
       ],
       "parameters": {
-        "jsCode": "// RatePhotos needs the listings again (EnrichNew outputs only id + extracted fields).\nreturn $('OnlyNewFlats').all();",
-        "language": "javaScript",
-        "mode": "runOnceForAllItems"
+        "jsCode": "// RatePhotos needs the listings again (EnrichNew outputs only id + extracted fields).\nreturn $('OnlyNewFlats').all();"
       }
     },
     {
@@ -465,19 +439,17 @@
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.4,
       "position": [
-        1568,
-        144
+        1248,
+        96
       ],
       "parameters": {
-        "mode": "once",
-        "options": {
-          "waitForSubWorkflow": true
-        },
-        "source": "database",
         "workflowId": {
           "__rl": true,
           "mode": "id",
           "value": "Bf5AqMSpJqScMgxu"
+        },
+        "options": {
+          "waitForSubWorkflow": true
         }
       },
       "onError": "continueRegularOutput",
@@ -489,35 +461,14 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        2688,
-        144
+        2048,
+        96
       ],
       "parameters": {
+        "url": "=https://bigquery.googleapis.com/bigquery/v2/projects/stan-hunter/jobs/{{ $json.jobReference.jobId }}",
         "authentication": "predefinedCredentialType",
-        "method": "GET",
         "nodeCredentialType": "googleApi",
-        "options": {
-          "pagination": {
-            "pagination": {
-              "completeExpression": "={{ $response.body.status?.state === 'DONE' }}",
-              "limitPagesFetched": true,
-              "maxRequests": 10,
-              "paginationCompleteWhen": "other",
-              "paginationMode": "updateAParameterInEachRequest",
-              "parameters": {
-                "parameters": [
-                  {
-                    "name": "poll",
-                    "type": "qs",
-                    "value": "={{ $pageCount }}"
-                  }
-                ]
-              },
-              "requestInterval": 2000
-            }
-          },
-          "timeout": 20000
-        },
+        "sendQuery": true,
         "queryParameters": {
           "parameters": [
             {
@@ -526,9 +477,26 @@
             }
           ]
         },
-        "sendQuery": true,
-        "specifyQuery": "keypair",
-        "url": "=https://bigquery.googleapis.com/bigquery/v2/projects/stan-hunter/jobs/{{ $json.jobReference.jobId }}"
+        "options": {
+          "pagination": {
+            "pagination": {
+              "parameters": {
+                "parameters": [
+                  {
+                    "name": "poll",
+                    "value": "={{ $pageCount }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ $response.body.status?.state === 'DONE' }}",
+              "limitPagesFetched": true,
+              "maxRequests": 10,
+              "requestInterval": 2000
+            }
+          },
+          "timeout": 20000
+        }
       },
       "credentials": {
         "googleApi": {
@@ -543,13 +511,11 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2912,
-        144
+        2272,
+        96
       ],
       "parameters": {
-        "jsCode": "// Poll result of the BigQuery load job (WaitForLoad repeats GET until state = DONE, max ~20 s).\n// errorResult → fail the run (Error alerts); nothing was inserted, so the same listings are picked up next run.\n// Still RUNNING or the poll itself failed → continue; messages then go out without a score.\nconst last = $input.all().at(-1)?.json ?? {};\nconst state = last.status?.state ?? 'UNKNOWN';\nconst err = last.status?.errorResult;\nif (err) throw new Error(`BigQuery load job: ${String(err.message ?? err.reason ?? 'error').slice(0, 300)}`);\nconst ids = $('ApplyEnrichment').all().map(i => i.json.id).filter(Boolean);\nreturn [{ json: { load_state: state, ids } }];",
-        "language": "javaScript",
-        "mode": "runOnceForAllItems"
+        "jsCode": "// Poll result of the BigQuery load job (WaitForLoad repeats GET until state = DONE, max ~20 s).\n// errorResult → fail the run (Error alerts); nothing was inserted, so the same listings are picked up next run.\n// Still RUNNING or the poll itself failed → continue; messages then go out without a score.\nconst last = $input.all().at(-1)?.json ?? {};\nconst state = last.status?.state ?? 'UNKNOWN';\nconst err = last.status?.errorResult;\nif (err) throw new Error(`BigQuery load job: ${String(err.message ?? err.reason ?? 'error').slice(0, 300)}`);\nconst ids = $('ApplyEnrichment').all().map(i => i.json.id).filter(Boolean);\nreturn [{ json: { load_state: state, ids } }];"
       }
     },
     {
@@ -558,21 +524,20 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        3136,
-        144
+        800,
+        336
       ],
       "parameters": {
-        "authentication": "predefinedCredentialType",
-        "contentType": "json",
-        "jsonBody": "={{ { query: 'SELECT id, ocena, lok FROM `stan-hunter.stan_hunter.listings_scored` WHERE id IN UNNEST(@ids)', useLegacySql: false, location: 'EU', timeoutMs: 30000, parameterMode: 'NAMED', queryParameters: [{ name: 'ids', parameterType: { type: 'ARRAY', arrayType: { type: 'STRING' } }, parameterValue: { arrayValues: ($json.ids.length ? $json.ids : ['-']).map(v => ({ value: v })) } }] } }}",
         "method": "POST",
+        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/stan-hunter/queries",
+        "authentication": "predefinedCredentialType",
         "nodeCredentialType": "googleApi",
-        "options": {
-          "timeout": 45000
-        },
         "sendBody": true,
         "specifyBody": "json",
-        "url": "https://bigquery.googleapis.com/bigquery/v2/projects/stan-hunter/queries"
+        "jsonBody": "={{ { query: 'SELECT id, ocena, lok FROM `stan-hunter.stan_hunter.listings_scored` WHERE id IN UNNEST(@ids)', useLegacySql: false, location: 'EU', timeoutMs: 30000, parameterMode: 'NAMED', queryParameters: [{ name: 'ids', parameterType: { type: 'ARRAY', arrayType: { type: 'STRING' } }, parameterValue: { arrayValues: ($json.ids.length ? $json.ids : ['-']).map(v => ({ value: v })) } }] } }}",
+        "options": {
+          "timeout": 45000
+        }
       },
       "credentials": {
         "googleApi": {
@@ -590,13 +555,11 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3360,
-        144
+        1024,
+        336
       ],
       "parameters": {
-        "jsCode": "// The 0–100 score comes from the BigQuery view listings_scored (the same formula /top uses), so it is computed once.\n// Missing score (query failed, load still running) → the message is sent without it.\nconst r = $input.first().json;\nconst fields = (r.schema?.fields || []).map(f => f.name);\nconst scores = {};\nfor (const row of r.rows || []) {\n  const o = Object.fromEntries(row.f.map((c, i) => [fields[i], c.v]));\n  scores[o.id] = { ocena: o.ocena === null ? null : Math.round(Number(o.ocena)), lok: o.lok === null ? null : Number(o.lok) };\n}\nreturn $('ApplyEnrichment').all().map(i => ({ json: { ...i.json, ocena: scores[i.json.id]?.ocena ?? null, lok: scores[i.json.id]?.lok ?? null } }));",
-        "language": "javaScript",
-        "mode": "runOnceForAllItems"
+        "jsCode": "// The 0–100 score comes from the BigQuery view listings_scored (the same formula /top uses), so it is computed once.\n// Missing score (query failed, load still running) → the message is sent without it.\nconst r = $input.first().json;\nconst fields = (r.schema?.fields || []).map(f => f.name);\nconst scores = {};\nfor (const row of r.rows || []) {\n  const o = Object.fromEntries(row.f.map((c, i) => [fields[i], c.v]));\n  scores[o.id] = { ocena: o.ocena === null ? null : Math.round(Number(o.ocena)), lok: o.lok === null ? null : Number(o.lok) };\n}\nreturn $('ApplyEnrichment').all().map(i => ({ json: { ...i.json, ocena: scores[i.json.id]?.ocena ?? null, lok: scores[i.json.id]?.lok ?? null } }));"
       }
     },
     {
@@ -605,11 +568,10 @@
       "type": "n8n-nodes-base.switch",
       "typeVersion": 3.2,
       "position": [
-        4032,
-        144
+        1840,
+        432
       ],
       "parameters": {
-        "options": {},
         "rules": {
           "values": [
             {
@@ -633,8 +595,8 @@
                   "version": 2
                 }
               },
-              "outputKey": "new",
-              "renameOutput": true
+              "renameOutput": true,
+              "outputKey": "new"
             },
             {
               "conditions": {
@@ -657,8 +619,8 @@
                   "version": 2
                 }
               },
-              "outputKey": "check",
-              "renameOutput": true
+              "renameOutput": true,
+              "outputKey": "check"
             },
             {
               "conditions": {
@@ -681,11 +643,12 @@
                   "version": 2
                 }
               },
-              "outputKey": "legacy",
-              "renameOutput": true
+              "renameOutput": true,
+              "outputKey": "legacy"
             }
           ]
-        }
+        },
+        "options": {}
       }
     },
     {
@@ -694,13 +657,12 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        4256,
-        240
+        2064,
+        448
       ],
       "parameters": {
-        "jsCode": "// Input for `Dedup - same flat check (Claude vision)`: the new listing and the one already sent with the same fingerprint.\nconst { dup_of, route, ...novi } = $json;\nreturn { json: { novi, postojeci: dup_of } };",
-        "language": "javaScript",
-        "mode": "runOnceForEachItem"
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Input for `Dedup - same flat check (Claude vision)`: one pair per candidate (the new listing + a flat already sent with the\n// same fingerprint, newest first, max 3). ApplyDupResult merges the verdicts back into one item per listing.\nconst out = [];\n$input.all().forEach((item, i) => {\n  const { dup_candidates, route, ...novi } = item.json;\n  (dup_candidates || []).forEach((c, rank) => out.push({ json: { novi, postojeci: { ...c, rank } }, pairedItem: { item: i } }));\n});\nreturn out;"
       }
     },
     {
@@ -709,19 +671,18 @@
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.4,
       "position": [
-        4480,
-        240
+        2288,
+        448
       ],
       "parameters": {
-        "mode": "each",
-        "options": {
-          "waitForSubWorkflow": true
-        },
-        "source": "database",
         "workflowId": {
           "__rl": true,
           "mode": "id",
           "value": "8bmS1hDZ2lXDudOf"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
         }
       },
       "onError": "continueRegularOutput"
@@ -732,13 +693,12 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        4704,
-        240
+        2512,
+        448
       ],
       "parameters": {
-        "jsCode": "// Back to the listing + the verdict. isti === true → one-line note; false or null (could not compare, API error) → full message.\nconst pair = $('BuildDupPair').item.json;\nconst L = pair.novi;\nconst prev = pair.postojeci;\nconst isti = $json.isti === true;\nconst kada = prev.t ? DateTime.fromMillis(prev.t).setZone('Europe/Belgrade').toFormat('dd.MM. HH:mm') : '';\nreturn { json: { ...L, dup_isti: isti, dup_razlog: $json.razlog ?? null, dup_izvor: prev.izvor, dup_url: prev.url, dup_kada: kada } };",
-        "language": "javaScript",
-        "mode": "runOnceForEachItem"
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Verdicts back on the listings, one item per listing. Same flat = isti === true for at least one candidate; the note points to the\n// oldest match (the flat most likely sent as a full message). false or null for all (could not compare, API error) → full message.\nconst fmt = t => (t ? DateTime.fromMillis(t).setZone('Europe/Belgrade').toFormat('dd.MM. HH:mm') : '');\nconst groups = new Map();\nfor (const { json: p } of $('BuildDupPair').all()) {\n  if (p.novi && !groups.has(p.novi.id)) groups.set(p.novi.id, { L: p.novi, first: p.postojeci, hit: null, razlog: null });\n}\nfor (const { json: r } of $input.all()) {\n  const g = r.novi && groups.get(r.novi.id);\n  if (!g || !r.postojeci) continue;\n  if (r.isti === true) {\n    if (!g.hit || (r.postojeci.rank ?? 0) > (g.hit.c.rank ?? 0)) g.hit = { c: r.postojeci, razlog: r.razlog ?? null };\n  } else if (!g.razlog && r.razlog) g.razlog = r.razlog;\n}\nreturn [...groups.values()].map(({ L, first, hit, razlog }) => {\n  const c = hit ? hit.c : first;\n  return { json: { ...L, dup_isti: !!hit, dup_razlog: hit ? hit.razlog : razlog, dup_izvor: c.izvor, dup_url: c.url, dup_kada: fmt(c.t) } };\n});"
       }
     },
     {
@@ -747,8 +707,8 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        4928,
-        240
+        2736,
+        448
       ],
       "parameters": {
         "conditions": {
@@ -781,20 +741,18 @@
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
       "position": [
-        5152,
-        336
+        2960,
+        576
       ],
       "parameters": {
+        "chatId": "123456789",
+        "text": "={{ (() => { const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); const j = $json; const head = j.route === 'legacy' ? `↪ <b>Verovatno isti stan</b> kao jedan ranije poslat` : `↪ <b>Isti stan</b> kao <a href=\"${esc(j.dup_url)}\">${esc(j.dup_izvor)} oglas</a>${j.dup_kada ? ` (${j.dup_kada})` : ''}, sada i na ${esc(j.izvor)}`; return head + `\\n🏠 ${j.cena} € · ${j.m2} m² · ${j.sobe ?? '?'} soba${(j.ocena ?? null) !== null ? ` · ⭐ ${j.ocena}/100` : ''}\\n📍 ${esc(j.naselje)}, ${esc(j.opstina)}` + (j.dup_razlog ? `\\n🤖 ${esc(j.dup_razlog)}` : '') + `\\n🔗 <a href=\"${esc(j.url)}\">Otvori (${esc(j.izvor)})</a>`; })() }}",
         "additionalFields": {
           "appendAttribution": false,
           "disable_notification": true,
           "disable_web_page_preview": true,
           "parse_mode": "HTML"
-        },
-        "chatId": "123456789",
-        "operation": "sendMessage",
-        "resource": "message",
-        "text": "={{ (() => { const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); const j = $json; const head = j.route === 'legacy' ? `↪ <b>Verovatno isti stan</b> kao jedan ranije poslat` : `↪ <b>Isti stan</b> kao <a href=\"${esc(j.dup_url)}\">${esc(j.dup_izvor)} oglas</a>${j.dup_kada ? ` (${j.dup_kada})` : ''}, sada i na ${esc(j.izvor)}`; return head + `\\n🏠 ${j.cena} € · ${j.m2} m² · ${j.sobe ?? '?'} soba${(j.ocena ?? null) !== null ? ` · ⭐ ${j.ocena}/100` : ''}\\n📍 ${esc(j.naselje)}, ${esc(j.opstina)}` + (j.dup_razlog ? `\\n🤖 ${esc(j.dup_razlog)}` : '') + `\\n🔗 <a href=\"${esc(j.url)}\">Otvori (${esc(j.izvor)})</a>`; })() }}"
+        }
       },
       "credentials": {
         "telegramApi": {
@@ -1166,7 +1124,8 @@
     "availableInMCP": true,
     "timezone": "Europe/Belgrade",
     "saveManualExecutions": true,
-    "errorWorkflow": "UTOIDEVnd1km2Fjp"
+    "errorWorkflow": "UTOIDEVnd1km2Fjp",
+    "binaryMode": "separate"
   },
   "meta": {
     "aiBuilderAssisted": true,
@@ -1246,7 +1205,7 @@
     "stan-hunter"
   ],
   "versionMetadata": {
-    "name": "RouteDup: no fallback output",
-    "description": "Updated nodes: RouteDup"
+    "name": "Same-flat check: up to 3 candidates, same-run listings",
+    "description": "MarkSameFlat keeps the last 3 flats per fingerprint (newest first) and adds each listing right away, so listings in the same run are compared with each other. BuildDupPair emits one pair per candidate; ApplyDupResult merges the verdicts (any isti → note pointing to the oldest match, otherwise full message)."
   }
 }

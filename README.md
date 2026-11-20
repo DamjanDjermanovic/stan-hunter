@@ -69,7 +69,7 @@ The rule I ended up with: **deterministic code wherever the answer must be exact
 - **Cheapest layer first.** 4zida already exposes deposit, pets and "no agency fee" as tags (layer A, free). The LLM (layer B) is used only for what nobody structured, only for new listings that pass the filter, at most 10 per run.
 - **Vision for photos.** The listing photo is the one thing no site describes in a field. Claude gets the cover photo URL (nothing is downloaded) and returns two 1–5 ratings plus up to eight words. Only new listings that pass the filter are rated, at most 15 per run, each exactly once (~1k tokens). A photo that isn't an interior returns `null` and counts as neutral.
 - **Vision for screenshots.** Facebook can't be scraped (and shouldn't be), so I screenshot a post on my phone and share it to the bot; Claude reads the image with the same schema as the text flow, and rates the photos in it on the same 1–5 scale.
-- **Deterministic candidates, LLM tie-breaker.** Deduplication by fingerprint alone either misses duplicates (sites spell neighbourhoods differently) or merges different flats that happen to share price, size and municipality. So the fingerprint only *proposes* a pair, and Claude decides by looking at both photos (furniture, rugs, windows, floors). It must be ≥ 0.7 confident to call it the same flat; anything unclear (no photo, API error, unreadable answer) is treated as a different flat, so a listing is never silently lost. The vision call only runs on collisions, a few times a day.
+- **Deterministic candidates, LLM tie-breaker.** Deduplication by fingerprint alone either misses duplicates (sites spell neighbourhoods differently) or merges different flats that happen to share price, size and municipality. So the fingerprint only *proposes* candidates (the last three flats sent with it, including listings from the same run), and Claude decides by looking at the photos of each pair (furniture, rugs, windows, floors). It must be ≥ 0.7 confident to call it the same flat; anything unclear (no photo, API error, unreadable answer) is treated as a different flat, so a listing is never silently lost. The vision call only runs on collisions, a few times a day.
 - **Graceful degradation.** If the site, the model or the JSON fails, the listing is stored without the extra fields. Enrichment can never block ingestion.
 - **Data minimisation.** Phone numbers and agent names are stripped before text is sent to the model; the bot ignores names in screenshots.
 
@@ -124,7 +124,7 @@ python3 scripts/sanitize_workflows.py export workflows   # fails if anything loo
 
 ## Lessons learned
 
-A few of the ~48 notes I kept while building it:
+A few of the ~51 notes I kept while building it:
 
 1. **Look at what the source really returns before designing the AI layer.** I planned "Claude reads the description" before noticing the 4zida list API has no description at all; half of what I wanted was already in structured tags.
 2. **Server-rendered sites hide their API in the page.** CityExpert's list isn't an XHR call, it's in the Angular transfer state; Nekretnine.rs ships React Query state in `__NEXT_DATA__`.
@@ -142,6 +142,9 @@ A few of the ~48 notes I kept while building it:
 14. **Work within the limits a site gives you.** Halo's email shows 5 of N new listings, and the listing pages are behind a bot challenge. Instead of fighting the challenge, I split one saved search into six (one per municipality) so every email fits under the limit.
 15. **Facebook Marketplace shows prices in the viewer's account currency.** A 500 € flat appeared as `$500/month`, and the model helpfully converted it to 460 €, which broke both the score and the duplicate check. The prompt now says: in Belgrade rentals `$` is the same number in euros.
 16. **Dedup is a precision/recall trade-off, so don't make it silently.** Matching on neighbourhood missed duplicates; matching on municipality risked hiding a different flat. The fix wasn't a better key but a second, smarter step only for the ambiguous cases, with a fail-open default.
+17. **A backlog tests what a normal run doesn't.** After a day offline, one run carried 23 listings. Two ads of the same flat arrived together and were each compared only with an older, different flat stored under the same fingerprint, so both went out in full. Every verdict was right; the system was comparing the wrong pairs. Now a fingerprint keeps the last three flats, and listings in one run are compared with each other.
+18. **"Seen in previous executions" means previous.** The same Halo listing came in two emails of one run (a municipality search and the old combined one) and was sent twice, because n8n's dedup only remembers earlier runs. Duplicates inside a batch need their own step.
+19. **Check that a fallback can actually fire.** The "5 of N listings in this email" button matched only the combined search's link format; municipality emails use a different URL, so an overflowing one would have gone unnoticed. I found it only by testing with real emails.
 
 ## What I'd do next
 
